@@ -59,6 +59,7 @@ icon_assets!(
         RotateCcw,
         Network,
         RadioTower,
+        Cast,
         ArrowDownLeft,
         ArrowUpRight,
         ListFilter,

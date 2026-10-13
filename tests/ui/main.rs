@@ -26,6 +26,7 @@ mod sftp;
 mod shortcuts;
 mod snippets;
 mod terminal;
+mod terminal_groups;
 mod transfer;
 mod update;
 mod workspace;

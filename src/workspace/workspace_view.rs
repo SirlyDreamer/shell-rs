@@ -146,9 +146,10 @@ pub(super) enum PromptOwner {
 /// Owns the host store, the dock and the registry of open per-host
 /// panels, and handles every application action.
 pub struct Workspace {
+    pub(super) broadcast: super::terminal_groups::TerminalBroadcast,
     pub(super) store: Entity<HostStore>,
     pub(super) dock_area: Entity<DockArea>,
-    skin: Rc<WorkspaceDockSkin>,
+    pub(super) skin: Rc<WorkspaceDockSkin>,
     /// The left dock's panel: the host tree or the forward list.
     pub(super) sidebar: Entity<Sidebar>,
     /// The right dock's panel: the tools for the host of the tab in front.
@@ -321,6 +322,7 @@ impl Workspace {
             DOCK_ID,
             Some(DOCK_VERSION),
             recent.clone().into(),
+            focus_handle.clone(),
             window,
             cx,
         );
@@ -433,6 +435,12 @@ impl Workspace {
                     }
                 },
             ),
+            // Zoom and sidebar toggles only notify. Keep the permanent
+            // broadcast control on the leading visible tab bar.
+            cx.observe(&dock_area, |this, _, cx| {
+                this.sync_broadcast(cx);
+                cx.notify();
+            }),
         ];
 
         // Hosts that start out connected get a terminal tab right away.
@@ -550,6 +558,7 @@ impl Workspace {
             next_local_terminal_id: 1,
             next_explorer_id: 1,
             active_tab: None,
+            broadcast: Default::default(),
             tool_terminal_choice: None,
             tool_sidebar_wanted: false,
             prompt_queue: VecDeque::new(),
@@ -718,6 +727,7 @@ impl Workspace {
         }
         // A tab dragged into another group may hide the one in front.
         self.sync_front(window, cx);
+        self.sync_broadcast(cx);
     }
 
     pub(super) fn enqueue_prompt(
@@ -2279,12 +2289,16 @@ fn new_terminal_panel(
         &panel,
         window,
         |this, _, event: &TerminalPanelEvent, window, cx| match event {
+            TerminalPanelEvent::Input(id, input) => {
+                this.broadcast_input(CenterTab::Terminal(*id), input, cx);
+            }
             TerminalPanelEvent::Activated(terminal_id, _) => {
                 this.set_active_tab(Some(CenterTab::Terminal(*terminal_id)), window, cx)
             }
             TerminalPanelEvent::Closed(terminal_id, host_id) => {
                 this.cancel_prompts_for_terminal(*terminal_id, window, cx);
                 this.terminals.remove(terminal_id);
+                this.sync_broadcast(cx);
                 if this.active_tab == Some(CenterTab::Terminal(*terminal_id)) {
                     this.set_active_tab(None, window, cx);
                 }
@@ -2298,6 +2312,7 @@ fn new_terminal_panel(
                 this.forget_unused_temporary_host(*host_id, window, cx);
             }
             TerminalPanelEvent::StatusChanged(_, host_id) => {
+                this.sync_broadcast(cx);
                 this.refresh_host_connection_state(*host_id, cx);
                 cx.notify();
             }
@@ -2463,6 +2478,9 @@ fn new_local_terminal_panel(
         &panel,
         window,
         |this, _, event: &LocalTerminalPanelEvent, window, cx| match event {
+            LocalTerminalPanelEvent::Input(id, input) => {
+                this.broadcast_input(CenterTab::LocalTerminal(*id), input, cx);
+            }
             LocalTerminalPanelEvent::Activated(id) => {
                 this.store
                     .update(cx, |store, cx| store.set_active(None, cx));
@@ -2471,12 +2489,16 @@ fn new_local_terminal_panel(
             }
             LocalTerminalPanelEvent::Closed(id) => {
                 this.local_terminals.remove(id);
+                this.sync_broadcast(cx);
                 if this.active_tab == Some(CenterTab::LocalTerminal(*id)) {
                     this.set_active_tab(None, window, cx);
                 }
                 cx.notify();
             }
-            LocalTerminalPanelEvent::StatusChanged(_) => cx.notify(),
+            LocalTerminalPanelEvent::StatusChanged(_) => {
+                this.sync_broadcast(cx);
+                cx.notify();
+            }
             LocalTerminalPanelEvent::Notice(id, notice) => {
                 this.on_terminal_notice(CenterTab::LocalTerminal(*id), notice, window, cx)
             }
@@ -2551,6 +2573,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_new_temporary_connection))
             .on_action(cx.listener(Self::on_quick_connect))
             .on_action(cx.listener(Self::on_new_local_terminal))
+            .on_action(cx.listener(Self::on_toggle_terminal_broadcast))
+            .on_action(cx.listener(Self::on_set_broadcast_target))
             .on_action(cx.listener(Self::on_edit_host))
             .on_action(cx.listener(Self::on_duplicate_host))
             .on_action(cx.listener(Self::on_move_host_node))

@@ -16,6 +16,7 @@ mod sidebar;
 mod snippets;
 mod status_bar;
 mod tabs;
+mod terminal_groups;
 mod title_bar;
 mod tool_sidebar;
 mod tools;

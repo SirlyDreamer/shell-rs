@@ -24,6 +24,7 @@ use super::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalPanelEvent {
+    Input(RemoteTerminalId, super::TerminalInputEvent),
     Activated(RemoteTerminalId, HostId),
     Closed(RemoteTerminalId, HostId),
     StatusChanged(RemoteTerminalId, HostId),
@@ -43,6 +44,7 @@ pub struct TerminalPanel {
     terminal: Entity<TerminalView>,
     remote_provider: SharedRemoteTerminalTransportProvider,
     tab_group: Option<WeakEntity<TabGroup>>,
+    broadcast: Option<super::BroadcastSelection>,
     /// A title the user gave this tab, to tell apart several connections to
     /// the same host. Lives as long as the tab, like the rest of the layout.
     custom_title: Option<SharedString>,
@@ -89,6 +91,9 @@ impl TerminalPanel {
             cx.subscribe(
                 &terminal,
                 |this, _, event: &TerminalEvent, cx| match event {
+                    TerminalEvent::Input(input) => {
+                        cx.emit(TerminalPanelEvent::Input(this.id, input.clone()));
+                    }
                     TerminalEvent::Started => {
                         cx.emit(TerminalPanelEvent::Connected(this.id, this.host_id));
                     }
@@ -116,6 +121,7 @@ impl TerminalPanel {
             terminal,
             remote_provider,
             tab_group: None,
+            broadcast: None,
             custom_title: None,
             _subscriptions: subscriptions,
         }
@@ -149,6 +155,17 @@ impl TerminalPanel {
 
     pub fn terminal(&self) -> &Entity<TerminalView> {
         &self.terminal
+    }
+
+    pub(crate) fn set_broadcast_selection(
+        &mut self,
+        selection: Option<super::BroadcastSelection>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.broadcast != selection {
+            self.broadcast = selection;
+            cx.notify();
+        }
     }
 
     pub fn lifecycle(&self, cx: &App) -> TerminalLifecycle {
@@ -245,7 +262,14 @@ impl Panel for TerminalPanel {
             .read(cx)
             .host(self.host_id)
             .and_then(|host| host.os);
-        let mark = HostMark::new(("terminal-tab-os", id.0), self.default_title(cx), os).small();
+        let mark = match self.broadcast {
+            Some(selection) => selection
+                .render(CenterTab::Terminal(id), self.tab_title(cx))
+                .into_any_element(),
+            None => HostMark::new(("terminal-tab-os", id.0), self.default_title(cx), os)
+                .small()
+                .into_any_element(),
+        };
         let tab_menu = self.tab_menu(cx);
         let state = match self.lifecycle(cx) {
             TerminalLifecycle::Starting => ConnectionState::Connecting,

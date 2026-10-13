@@ -1,9 +1,11 @@
 //! 终端: shared terminal emulation, transports and Dock panels.
 
+mod broadcast;
 mod engine;
 mod exec;
 mod font;
 mod highlight;
+mod input;
 mod links;
 mod local_pty;
 mod local_shell;
@@ -19,6 +21,7 @@ mod terminal_view;
 mod theme;
 mod transport;
 
+pub(crate) use broadcast::BroadcastSelection;
 pub use engine::{TerminalCell, TerminalEngine, TerminalEvent, TerminalSnapshot};
 pub use exec::{ExecTarget, exec_answer};
 pub use font::{
@@ -28,6 +31,7 @@ pub use font::{
 pub use highlight::{
     HighlightColor, HighlightRule, HighlightSet, PatternError, TerminalHighlights, default_rules,
 };
+pub use input::{TerminalInput, TerminalInputEvent};
 pub use local_pty::LocalPtyTransportProvider;
 pub use local_shell::{LocalShell, default_shell_name, installed_shells, quote_word};
 pub use local_terminal_panel::{LocalTerminalPanel, LocalTerminalPanelEvent};
