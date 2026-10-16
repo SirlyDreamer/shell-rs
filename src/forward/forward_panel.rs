@@ -324,6 +324,7 @@ impl ForwardPanel {
         };
 
         let item = ListItem::new(("forward-row", id.0))
+            .text_sm()
             .w_full()
             .px_2()
             .py_1p5()

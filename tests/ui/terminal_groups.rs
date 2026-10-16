@@ -138,12 +138,12 @@ async fn permanent_toggle_replaces_logos_without_adding_a_toolbar(cx: &mut TestA
         assert!(window.try_find("terminal-controls").is_none());
         assert!(window.try_find("split-terminal-right").is_none());
         assert!(window.try_find("start-terminal-broadcast").is_none());
-        let hide = window.find("toggle-dock:Left").bounds();
+        assert!(window.try_find("toggle-dock:Left").is_none());
+        let hide = window.find("toggle-hosts").bounds();
         let broadcast = window.find("toggle-terminal-broadcast").bounds();
         let tab = window.find(("terminal-tab", INITIAL_WEB_TERMINAL)).bounds();
-        assert!(hide.right() <= broadcast.left());
+        assert!(hide.bottom() <= broadcast.top());
         assert!(broadcast.right() <= tab.left());
-        assert!((hide.center().y - broadcast.center().y).abs() <= px(1.));
         assert!(
             window
                 .find(("terminal-tab-os", INITIAL_WEB_TERMINAL))
@@ -191,7 +191,8 @@ async fn permanent_toggle_replaces_logos_without_adding_a_toolbar(cx: &mut TestA
             window.click(("close-terminal", id), cx)
         });
         in_frame(cx, handle, |window, _| {
-            assert!(window.find("toggle-terminal-broadcast").visible())
+            assert!(window.find("toggle-terminal-broadcast").visible());
+            assert!(window.try_find("toggle-dock:Left").is_none());
         });
     }
 }
@@ -454,4 +455,241 @@ async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
     });
     assert_eq!(fixture.web.starts(), 1);
     assert_eq!(fixture.staging.starts(), 1);
+}
+
+/// A split must not turn a single tab into a differently sized title bar.
+/// Check the actual painted backgrounds and tab corners as well as bounds.
+#[gpui_kit::test]
+async fn split_tabs_share_chrome_and_keep_long_titles_closable_at_interface_scales(
+    cx: &mut TestAppContext,
+) {
+    let fixture = open(cx).await;
+    let handle = fixture.handle;
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+        window.dispatch_action(
+            Box::new(RenameTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+            cx,
+        );
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click("tab-name", cx);
+        window.press("secondary-a", cx);
+        window.input(
+            "NVIDIA-RTX5090-32G-97 · 上海开发环境 · 一个需要省略的很长的主机名称",
+            cx,
+        );
+        window.click("commit", cx);
+    });
+    split_pair(cx, handle);
+    let settings = cx.update(|cx| fixture.workspace.read(cx).settings().clone());
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        for font_size in [12., 16., 20.] {
+            cx.update(|cx| {
+                settings.update(cx, |store, cx| {
+                    store.update(
+                        |settings| {
+                            settings.interface.font_size = font_size;
+                            settings.appearance = appearance;
+                        },
+                        cx,
+                    )
+                })
+            });
+            cx.run_until_parked();
+            in_frame(cx, handle, |window, cx| {
+                let mut bars = Vec::new();
+                let mut tabs = Vec::new();
+                for id in [INITIAL_WEB_TERMINAL, INITIAL_STAGING_TERMINAL] {
+                    let panel = fixture
+                        .workspace
+                        .read(cx)
+                        .remote_terminal(RemoteTerminalId(id))
+                        .unwrap();
+                    let panel_id = panel.entity_id().as_u64();
+                    let node = panel
+                        .read(cx)
+                        .tab_group()
+                        .unwrap()
+                        .upgrade()
+                        .unwrap()
+                        .read(cx)
+                        .node();
+                    let bar = window.find(("center-tab-bar", node.as_u64())).bounds();
+                    let tab = window.find(("center-tab", panel_id));
+                    let close = window.find(("close-terminal", id)).bounds();
+                    assert_eq!(tab.selected(), Some(true));
+                    assert!(tab.bounds().top() > bar.top());
+                    assert!(tab.bounds().bottom() < bar.bottom());
+                    assert!(close.left() >= tab.bounds().left());
+                    assert!(close.right() <= tab.bounds().right());
+                    assert!(close.top() >= tab.bounds().top());
+                    assert!(close.bottom() <= tab.bounds().bottom());
+                    assert!(close.right() <= bar.right());
+                    let quads = window.painted_quads();
+                    let painted_bar = quads
+                        .iter()
+                        .find(|quad| quad.bounds == bar.scale(window.scale_factor()))
+                        .unwrap();
+                    assert_eq!(painted_bar.background, cx.theme().tokens.tab_bar.into());
+                    let painted_tab = quads
+                        .iter()
+                        .find(|quad| quad.bounds == tab.bounds().scale(window.scale_factor()))
+                        .unwrap();
+                    assert!(painted_tab.corner_radii.top_left.as_f32() > 0.);
+                    bars.push(bar);
+                    tabs.push(tab.bounds());
+                }
+                assert_eq!(bars[0].top(), bars[1].top());
+                assert_eq!(bars[0].size.height, bars[1].size.height);
+                assert!(tabs[0].size.width > tabs[1].size.width);
+            });
+        }
+    }
+    in_frame(cx, handle, |window, cx| {
+        window.click(("close-terminal", INITIAL_WEB_TERMINAL), cx)
+    });
+    in_frame(cx, handle, |window, _| {
+        assert!(
+            window
+                .try_find(("terminal-tab", INITIAL_WEB_TERMINAL))
+                .is_none()
+        );
+        assert!(
+            window
+                .find(("terminal", INITIAL_STAGING_TERMINAL))
+                .visible()
+        );
+    });
+}
+
+#[gpui_kit::test]
+async fn overflowing_tabs_reveal_the_new_selection_and_its_close_button(cx: &mut TestAppContext) {
+    let fixture = open(cx).await;
+    let handle = fixture.handle;
+    for id in 1..=12_u64 {
+        in_frame(cx, handle, |window, cx| {
+            window.click("new-local-terminal", cx)
+        });
+        in_frame(cx, handle, |window, cx| {
+            let panel = fixture
+                .workspace
+                .read(cx)
+                .local_terminal(LocalTerminalId(id))
+                .unwrap();
+            let node = panel
+                .read(cx)
+                .tab_group()
+                .unwrap()
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .node();
+            let bar = window.find(("center-tab-bar", node.as_u64())).bounds();
+            let tab = window.find(("local-terminal-tab", id)).bounds();
+            let close = window.find(("close-local-terminal", id));
+            assert!(close.visible());
+            assert!(tab.left() >= bar.left());
+            assert!(tab.right() <= bar.right());
+            assert!(close.bounds().right() <= tab.right());
+        });
+    }
+    for id in (1..=12_u64).rev() {
+        in_frame(cx, handle, |window, cx| {
+            window.click(("close-local-terminal", id), cx)
+        });
+        in_frame(cx, handle, |window, _| {
+            assert!(window.try_find(("local-terminal-tab", id)).is_none())
+        });
+    }
+}
+
+/// Inspect real layout and painted checkbox boxes: the leading slot must
+/// keep its center when an OS badge is replaced by broadcast membership.
+#[gpui_kit::test]
+async fn host_badges_and_broadcast_checkboxes_stay_centered_at_interface_scales(
+    cx: &mut TestAppContext,
+) {
+    let fixture = open(cx).await;
+    let handle = fixture.handle;
+    let settings = cx.update(|cx| {
+        let workspace = fixture.workspace.read(cx);
+        let store = workspace.store().clone();
+        let settings = workspace.settings().clone();
+        store.update(cx, |store, cx| {
+            store.set_host_os(HostId(WEB_01), Some(HostOs::Ubuntu), cx)
+        });
+        settings
+    });
+    for font_size in [12., 16., 20.] {
+        cx.update(|cx| {
+            settings.update(cx, |store, cx| {
+                store.update(|settings| settings.interface.font_size = font_size, cx)
+            })
+        });
+        cx.run_until_parked();
+        for broadcasting in [false, true] {
+            in_frame(cx, handle, |window, cx| {
+                for (host, terminal) in [
+                    (WEB_01, INITIAL_WEB_TERMINAL),
+                    (STAGING_API, INITIAL_STAGING_TERMINAL),
+                ] {
+                    let badge = window.find(("host-os", host)).bounds();
+                    let glyph = window.within(("host-os", host)).find("glyph").bounds();
+                    assert!((glyph.center().x - badge.center().x).abs() <= px(0.5));
+                    assert!((glyph.center().y - badge.center().y).abs() <= px(0.5));
+                    let row = window.find(("host-row", host)).bounds();
+                    assert!(
+                        (badge.center().y - row.center().y).abs() <= px(0.5),
+                        "host {host} at {font_size}: badge {badge:?}, row {row:?}"
+                    );
+                    let panel = fixture
+                        .workspace
+                        .read(cx)
+                        .remote_terminal(RemoteTerminalId(terminal))
+                        .unwrap();
+                    let tab = window
+                        .find(("center-tab", panel.entity_id().as_u64()))
+                        .bounds();
+                    let leading = window
+                        .find((
+                            if broadcasting {
+                                "broadcast-remote"
+                            } else {
+                                "terminal-tab-os"
+                            },
+                            terminal,
+                        ))
+                        .bounds();
+                    let close = window.find(("close-terminal", terminal)).bounds();
+                    assert!(
+                        (leading.center().y - tab.center().y).abs() <= px(0.5),
+                        "terminal {terminal} at {font_size}: leading {leading:?}, tab {tab:?}"
+                    );
+                    assert!((close.center().y - leading.center().y).abs() <= px(0.5));
+                    if broadcasting {
+                        let expected_size = window.rem_size() * 0.875;
+                        let scale = window.scale_factor();
+                        let indicator = window
+                            .painted_quads()
+                            .into_iter()
+                            .find(|quad| {
+                                let bounds = quad.bounds.map(|value| px(value.as_f32() / scale));
+                                leading.contains(&bounds.center())
+                                    && (bounds.size.width - expected_size).abs() <= px(0.5)
+                                    && (bounds.size.height - expected_size).abs() <= px(0.5)
+                            })
+                            .expect("the checkbox indicator is painted in its hit target");
+                        let center = indicator
+                            .bounds
+                            .map(|value| px(value.as_f32() / scale))
+                            .center();
+                        assert!((center.y - tab.center().y).abs() <= px(0.5));
+                        assert!((center.x - leading.center().x).abs() <= px(0.5));
+                    }
+                }
+                window.click("toggle-terminal-broadcast", cx);
+            });
+        }
+    }
 }

@@ -5,6 +5,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{ContextMenuExt as _, PopupMenu},
+    tooltip::Tooltip,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -27,9 +28,9 @@ type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) ->
 /// Double-clicking the title shows or hides the host sidebar, the way a
 /// double click on an editor tab gives it the room elsewhere.
 ///
-/// The context menu and the double click hang on the title rather than on
-/// the dock's `Tab`, which the application does not render. The tab's own
-/// horizontal padding is therefore outside them; clicks there only select.
+/// The context menu and the double click belong to the title, so panels keep
+/// those commands regardless of the dock skin. The tab's horizontal padding
+/// is outside them; clicks there only select.
 #[derive(IntoElement)]
 pub struct ClosableTabTitle {
     id: ElementId,
@@ -101,10 +102,27 @@ impl RenderOnce for ClosableTabTitle {
             .is_some_and(|state| !state.is_connected());
         let row = h_flex()
             .id("title")
+            .w_full()
+            .min_w_0()
+            .text_sm()
+            .line_height(relative(1.))
             .gap_1()
-            .child(self.leading)
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .justify_center()
+                    .child(self.leading),
+            )
             .child(
                 div()
+                    .id("label")
+                    .min_w_0()
+                    .flex_1()
+                    .text_ellipsis()
+                    .tooltip({
+                        let label = self.label.clone();
+                        move |window, cx| Tooltip::new(label.clone()).build(window, cx)
+                    })
                     .when(offline, |label| {
                         label.text_color(cx.theme().muted_foreground)
                     })
@@ -124,6 +142,7 @@ impl RenderOnce for ClosableTabTitle {
             .when_some(self.close, |row, (id, action)| {
                 row.child(
                     Button::new(id)
+                        .flex_shrink_0()
                         .ghost()
                         .xsmall()
                         .icon(IconName::Close)
@@ -135,8 +154,10 @@ impl RenderOnce for ClosableTabTitle {
                         }),
                 )
             });
-        div()
+        h_flex()
             .id(self.id)
+            .w_full()
+            .min_w_0()
             // The first click selects the tab as usual.
             .on_click(|event, window, cx| {
                 if event.click_count() == 2 {

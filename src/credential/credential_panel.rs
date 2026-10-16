@@ -294,6 +294,7 @@ impl CredentialPanel {
         );
 
         let item = ListItem::new(("credential-row", id.0))
+            .text_sm()
             .w_full()
             .px_2()
             .py_1p5()

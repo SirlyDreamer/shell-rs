@@ -42,7 +42,7 @@ impl Workspace {
         }
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.show(mode, window, cx));
-        // The title bar marks the list being shown.
+        // Refresh the dock header and the window's sidebar toggle.
         cx.notify();
     }
 

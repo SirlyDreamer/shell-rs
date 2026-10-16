@@ -4,7 +4,7 @@
 
 An SSH host manager built on GPUI Kit, with saved hosts and groups, login credentials that several hosts can share, local terminals, multiple SSH terminals, a WinSCP-style dual-pane SFTP browser and SSH port forwarding.
 
-The three icons after “ShellRS” in the title bar switch what the left sidebar shows: the host list, the port forwarding list or the credential list. When the sidebar is hidden, clicking one of them shows it again.
+The three icons in the left sidebar header switch between hosts, port forwarding and credentials. The window title bar keeps the sidebar toggle, “Quick connect…” and “Local terminal” on the left. When the sidebar is hidden, its toggle restores the last list shown.
 
 Only one ShellRS runs at a time: opening it again while it’s running brings the existing window to the front, and the newly launched copy quits. Two copies would each load the hosts into memory and write them back to the same database, overwriting each other’s changes. (Copies pointed at different data folders with `SHELLRS_DATA_DIR` count as different and can run side by side.) To see two terminals or SFTP tabs side by side, drag a tab into a split.
 
@@ -75,7 +75,7 @@ Drag a group or host above or below another item of the same kind to reorder ite
 
 ## Quick connect
 
-“Quick connect…” at the top right of the title bar connects to a host without saving it, for machines you log in to only once. As for a new host, the dialog asks for the address, port and authentication (Password, Credential or No password); there are no Group, Connection or Notes fields, and the name is optional (the address is used instead). You can “Test connection” first. With “Telnet” as the protocol, enter the address, port and automatic login (the password stays in memory); with “Serial”, enter a serial port and its line to open it directly. “Connect” opens a terminal tab:
+“Quick connect…” on the left of the title bar connects to a host without saving it, for machines you log in to only once. As for a new host, the dialog asks for the address, port and authentication (Password, Credential or No password); there are no Group, Connection or Notes fields, and the name is optional (the address is used instead). You can “Test connection” first. With “Telnet” as the protocol, enter the address, port and automatic login (the password stays in memory); with “Serial”, enter a serial port and its line to open it directly. “Connect” opens a terminal tab:
 
 - **Fully featured**: “Connect in new tab”, “Open SFTP”, “Reconnect” and all the right sidebar tools work. The connection is direct.
 - **Not saved**: it stays out of the host list, the start page’s Recent list and the database, and is gone once its terminal and SFTP tabs are all closed. Its tab menu has no “Edit host…”.
@@ -86,7 +86,7 @@ Hosts you want to keep are created with “+” at the top of the host list, the
 
 ## Port forwarding
 
-Click the port forwarding icon in the title bar and the left sidebar switches to the list of forwards. Each forwarding rule goes through a saved host and opens an SSH connection of its own when it starts, independent of that host’s terminal or SFTP tabs: closing the tabs or choosing “Disconnect” on the host doesn’t affect it, and the host’s connection state doesn’t count it. While forwards are running, the number running appears next to the port forwarding icon in the title bar.
+Click the port forwarding icon in the sidebar header to show the list of forwards. Each forwarding rule goes through a saved host and opens an SSH connection of its own when it starts, independent of that host’s terminal or SFTP tabs: closing the tabs or choosing “Disconnect” on the host doesn’t affect it, and the host’s connection state doesn’t count it. While forwards are running, the number running appears next to the port forwarding icon in the sidebar header.
 
 There are three kinds of forward. Think of each as “entrance → exit → destination”: a connection comes in at the entrance, goes through the SSH tunnel to the exit, and the exit connects to the destination:
 
@@ -110,7 +110,7 @@ There are three kinds of forward. Think of each as “entrance → exit → dest
 
 ## Credentials
 
-Click the credentials (key) icon in the title bar and the left sidebar switches to the list of credentials. A credential is a set of login details that several hosts can share: a name, a username and a way to log in:
+Click the credentials (key) icon in the sidebar header to show the list of credentials. A credential is a set of login details that several hosts can share: a name, a username and a way to log in:
 
 | Type | What it keeps | When logging in |
 | --- | --- | --- |

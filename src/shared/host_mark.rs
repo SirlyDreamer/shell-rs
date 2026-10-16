@@ -213,10 +213,25 @@ impl RenderOnce for HostMark {
                 }
             })
             .justify_center()
+            .line_height(relative(1.))
             .rounded_full_style(cx)
             .bg(background)
             .text_color(ink)
-            .child(glyph)
+            .child(
+                h_flex()
+                    .id("glyph")
+                    .test_support()
+                    .flex_shrink_0()
+                    .justify_center()
+                    .map(|slot| {
+                        if compact {
+                            slot.size_3()
+                        } else {
+                            slot.size_5()
+                        }
+                    })
+                    .child(glyph),
+            )
     }
 }
 

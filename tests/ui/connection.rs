@@ -720,7 +720,7 @@ async fn a_link_opens_a_terminal_to_a_host_that_goes_with_its_last_tab(cx: &mut 
         );
         // Not saved, and across the window: the hosts made way.
         assert!(window.try_find(("host-row", LINK_HOST.0)).is_none());
-        assert_eq!(window.find("show-hosts").checked(), Some(false));
+        assert!(window.try_find("show-hosts").is_none());
         assert!(window.try_find("host-search").is_none());
         // The bastion host gets the terminal alone: of the tools, only the
         // snippets, which type into it.
@@ -838,7 +838,7 @@ async fn an_sftp_link_opens_an_sftp_tab_across_the_window(cx: &mut TestAppContex
         );
         // An SFTP tab alone, across the window.
         assert!(window.try_find(("terminal", LINK_TERMINAL)).is_none());
-        assert_eq!(window.find("show-hosts").checked(), Some(false));
+        assert!(window.try_find("show-hosts").is_none());
         assert!(window.try_find(("host-row", LINK_HOST.0)).is_none());
     })
     .unwrap();

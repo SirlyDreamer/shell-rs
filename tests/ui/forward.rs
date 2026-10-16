@@ -39,7 +39,7 @@ async fn wait_for_forward_status(
 }
 
 #[gpui_kit::test]
-async fn the_title_bar_switches_the_sidebar_between_hosts_and_forwards(cx: &mut TestAppContext) {
+async fn the_sidebar_header_switches_between_hosts_and_forwards(cx: &mut TestAppContext) {
     let (handle, _) = open_workspace_with_forwards(
         cx,
         HostStore::seed(),
@@ -63,6 +63,15 @@ async fn the_title_bar_switches_the_sidebar_between_hosts_and_forwards(cx: &mut 
         let host = window.find("new-host-panel").bounds();
         let group = window.find("new-group").bounds();
         assert!(host.right() <= group.left(), "{host:?} {group:?}");
+        let header = window.find("sidebar-header").bounds();
+        for id in ["show-hosts", "show-forwards", "show-credentials"] {
+            let button = window.find(id).bounds();
+            assert!(header.contains(&button.center()));
+            assert!(button.right() <= host.left(), "{id} overlaps the toolbar");
+        }
+        let commands = window.find("title-connection-commands").bounds();
+        assert!(commands.bottom() <= header.top());
+        assert!(commands.left() < header.right());
     });
 
     show_forwards(cx, handle).await;
@@ -87,14 +96,17 @@ async fn the_title_bar_switches_the_sidebar_between_hosts_and_forwards(cx: &mut 
         assert_eq!(window.find("forward-search").focused(), Some(true));
     });
 
-    // Hidden, the sidebar marks neither; picking a list brings it back.
+    // The switch now belongs to the sidebar and hides with it. The title
+    // bar's toggle restores the same list before another mode is picked.
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(ToggleHostPanel), cx);
     });
     assert!(!showing(cx, "forward-search"));
     in_frame(cx, handle, |window, _| {
-        assert_eq!(window.find("show-forwards").checked(), Some(false));
+        assert!(window.try_find("show-forwards").is_none());
     });
+    in_frame(cx, handle, |window, cx| window.click("toggle-hosts", cx));
+    assert!(showing(cx, "forward-search"));
     in_frame(cx, handle, |window, cx| window.click("show-hosts", cx));
     assert!(showing(cx, "host-search"));
     assert!(!showing(cx, "forward-search"));
@@ -106,6 +118,65 @@ async fn the_title_bar_switches_the_sidebar_between_hosts_and_forwards(cx: &mut 
     in_frame(cx, handle, |window, _| {
         assert_eq!(window.find("host-search").focused(), Some(true));
     });
+}
+
+#[gpui_kit::test]
+async fn sidebar_commands_fit_a_narrow_window_in_both_languages(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace_with_forwards(
+        cx,
+        HostStore::seed(),
+        Arc::new(FakeForwardProvider::default()),
+    );
+    cx.simulate_window_resize(handle.into(), size(px(900.), px(600.)));
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+    for language in [
+        InterfaceLanguage::SimplifiedChinese,
+        InterfaceLanguage::English,
+    ] {
+        for font_size in [12., 16., 20.] {
+            cx.update(|cx| {
+                settings.update(cx, |store, cx| {
+                    store.update(
+                        |settings| {
+                            settings.language = language;
+                            settings.interface.font_size = font_size;
+                        },
+                        cx,
+                    )
+                })
+            });
+            cx.run_until_parked();
+            for (mode, add) in [
+                ("show-hosts", "new-host-panel"),
+                ("show-forwards", "new-forward"),
+                ("show-credentials", "new-credential"),
+            ] {
+                in_frame(cx, handle, |window, cx| window.click(mode, cx));
+                in_frame(cx, handle, |window, _| {
+                    assert_eq!(window.find(mode).checked(), Some(true));
+                    let header = window.find("sidebar-header").bounds();
+                    let toolbar = window.find(add).bounds();
+                    let heading = window.find("sidebar-heading").bounds();
+                    assert!(heading.size.width > px(0.));
+                    assert!(heading.right() <= toolbar.left());
+                    for button in ["show-hosts", "show-forwards", "show-credentials"] {
+                        let bounds = window.find(button).bounds();
+                        assert!(bounds.left() >= header.left());
+                        assert!(bounds.right() <= heading.left());
+                        assert!((bounds.center().y - toolbar.center().y).abs() <= px(0.5));
+                    }
+                    let commands = window.find("title-connection-commands").bounds();
+                    assert!(commands.right() < window.find("theme-toggle").bounds().left());
+                    assert!(commands.bottom() <= header.top());
+                    let toggle = window.find("toggle-hosts").bounds();
+                    let temporary = window.find("temporary-connection").bounds();
+                    let local = window.find("new-local-terminal").bounds();
+                    assert!(toggle.right() <= temporary.left());
+                    assert!(temporary.right() <= local.left());
+                });
+            }
+        }
+    }
 }
 
 #[gpui_kit::test]

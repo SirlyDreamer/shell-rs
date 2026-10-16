@@ -75,8 +75,12 @@ impl Workspace {
         }
         let area = self.dock_area.read(cx);
         let mut first = None;
+        let mut groups = Vec::new();
         if let Some(tree) = area.layout(DockPlacement::Center) {
             tree.root().walk(&mut |node| {
+                if matches!(node.kind(), PaneRef::Tabs { .. }) {
+                    groups.push(node.id());
+                }
                 if first.is_none()
                     && matches!(node.kind(), PaneRef::Tabs { .. })
                     && area.zoomed_group().is_none_or(|zoomed| zoomed == node.id())
@@ -85,11 +89,9 @@ impl Workspace {
                 }
             });
         }
-        let hosts_open = (!area.is_zoomed() && area.is_dock_collapsible(DockPlacement::Left))
-            .then(|| area.is_dock_open(DockPlacement::Left));
         self.skin.set_broadcast(
+            groups,
             first,
-            hosts_open,
             self.broadcast.enabled,
             self.broadcast.selected.len(),
             cx,

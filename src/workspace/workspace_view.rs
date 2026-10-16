@@ -139,6 +139,14 @@ pub(super) enum PromptOwner {
     Forward(ForwardId, u64),
 }
 
+/// The terminal connection already used by its file sidebar. A delayed
+/// Connected notification must not reopen a channel on the same connection.
+#[derive(Clone, Copy)]
+pub(super) struct FileSidebar {
+    pub(super) explorer: ExplorerId,
+    generation: u64,
+}
+
 /// The main window content: title bar above the dock, status bar below.
 ///
 /// Owns the host store, the dock and the registry of open per-host
@@ -164,7 +172,7 @@ pub struct Workspace {
     pub(super) explorers: HashMap<ExplorerId, Entity<ExplorerPanel>>,
     /// Each remote terminal's 文件, once shown: on the terminal's own
     /// connection, and gone with the terminal.
-    pub(super) file_sidebars: HashMap<RemoteTerminalId, ExplorerId>,
+    pub(super) file_sidebars: HashMap<RemoteTerminalId, FileSidebar>,
     /// 目录跟随: what each terminal's current connection was found to be.
     pub(super) directory_follow: HashMap<RemoteTerminalId, super::follow::FollowState>,
     pub(super) local_terminals: HashMap<LocalTerminalId, Entity<LocalTerminalPanel>>,
@@ -362,7 +370,16 @@ impl Workspace {
         });
         let credential_panel =
             cx.new(|cx| CredentialPanel::new(store.clone(), focus_handle.clone(), window, cx));
-        let sidebar = cx.new(|_| Sidebar::new(host_panel.clone(), forward_panel, credential_panel));
+        let sidebar = cx.new(|cx| {
+            Sidebar::new(
+                host_panel.clone(),
+                forward_panel,
+                credential_panel,
+                forwards.clone(),
+                focus_handle.clone(),
+                cx,
+            )
+        });
         let tools = cx.new(|cx| ToolSidebar::new(store.clone(), focus_handle.clone(), window, cx));
         // Start with focus in the host panel so window-level actions have a
         // dispatch path. The workspace's own handle is never focused: the
@@ -659,14 +676,15 @@ impl Workspace {
 
     /// A remote terminal's 文件, once it has been shown.
     pub fn file_sidebar(&self, terminal: RemoteTerminalId) -> Option<&Entity<ExplorerPanel>> {
-        self.explorers.get(self.file_sidebars.get(&terminal)?)
+        self.explorers
+            .get(&self.file_sidebars.get(&terminal)?.explorer)
     }
 
     /// The terminal whose 文件 an explorer is, if it is one.
     pub(super) fn sidebar_terminal(&self, explorer: ExplorerId) -> Option<RemoteTerminalId> {
         self.file_sidebars
             .iter()
-            .find(|(_, id)| **id == explorer)
+            .find(|(_, sidebar)| sidebar.explorer == explorer)
             .map(|(terminal, _)| *terminal)
     }
 
@@ -688,13 +706,20 @@ impl Workspace {
         };
         let host = panel.host().clone();
         let channels = panel.terminal().read(cx).channels(cx);
+        let generation = panel.terminal().read(cx).generation(cx);
         let id = ExplorerId(self.next_explorer_id);
         self.next_explorer_id += 1;
         let route = SftpRoute::Terminal(channels);
         let (panel, subscription) = new_explorer_panel(self, id, host, login, route, window, cx);
         self._subscriptions.push(subscription);
         self.explorers.insert(id, panel.clone());
-        self.file_sidebars.insert(terminal, id);
+        self.file_sidebars.insert(
+            terminal,
+            FileSidebar {
+                explorer: id,
+                generation,
+            },
+        );
         let follow = self.directory_follow_setting(cx);
         panel.update(cx, |panel, cx| panel.set_follow(follow, cx));
         // Where the terminal is, rather than home, if its shell said.
@@ -1460,7 +1485,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Some(&sidebar) = self.file_sidebars.get(&id)
-            && self.ask_before_closing(sidebar, ask_about_unsaved, true, window, cx)
+            && self.ask_before_closing(sidebar.explorer, ask_about_unsaved, true, window, cx)
         {
             return;
         }
@@ -2411,7 +2436,20 @@ fn new_terminal_panel(
                 // A new connection, maybe to another machine: its folder is
                 // what it reports from now on, and it is checked afresh,
                 // first, so the check runs before 文件's channel opens.
-                if let Some(panel) = this.file_sidebar(*terminal_id).cloned() {
+                let generation = this.terminals[terminal_id]
+                    .read(cx)
+                    .terminal()
+                    .read(cx)
+                    .generation(cx);
+                let reconnect = this
+                    .file_sidebars
+                    .get_mut(terminal_id)
+                    .is_some_and(|sidebar| {
+                        let changed = sidebar.generation != generation;
+                        sidebar.generation = generation;
+                        changed
+                    });
+                if reconnect && let Some(panel) = this.file_sidebar(*terminal_id).cloned() {
                     panel.update(cx, |panel, _| panel.forget_follow_target());
                 }
                 if this.tool_showing(cx) == Some(ToolKind::Files)
@@ -2421,7 +2459,8 @@ fn new_terminal_panel(
                 }
                 // 文件 comes back with its terminal: a channel on the new
                 // connection, whatever the old one's state.
-                if let Some(panel) = this.file_sidebar(*terminal_id).cloned()
+                if reconnect
+                    && let Some(panel) = this.file_sidebar(*terminal_id).cloned()
                     && panel.read(cx).can_reconnect()
                 {
                     let id = panel.read(cx).id();
@@ -2553,7 +2592,7 @@ fn new_explorer_panel(
                     this.set_active_tab(None, window, cx);
                 }
                 let sidebars = this.file_sidebars.len();
-                this.file_sidebars.retain(|_, sidebar| sidebar != id);
+                this.file_sidebars.retain(|_, sidebar| sidebar.explorer != *id);
                 if this.file_sidebars.len() != sidebars {
                     // The right sidebar lets go of it.
                     this.sync_tool_sidebar(window, cx);
@@ -2689,7 +2728,6 @@ impl Render for Workspace {
             _ => WorkspaceStatus::Host(None, None),
         };
         let sidebar = self.sidebar_showing(cx);
-        let running_forwards = self.forwards.read(cx).active_count();
         let tool = self.tool_showing(cx);
         let offered_tools = self.offered_tools(cx);
 
@@ -2832,7 +2870,6 @@ impl Render for Workspace {
             .text_color(cx.theme().foreground)
             .child(render_title_bar(
                 sidebar,
-                running_forwards,
                 self.updater.read(cx).snapshot().badge(),
                 &self.focus_handle,
                 cx,

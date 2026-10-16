@@ -61,6 +61,16 @@ workspace.sidebar.open_settings:
   zh-CN: 打开设置
   en: Open settings
 
+workspace.tabs.zoom_in:
+  zh-CN: 最大化分屏
+  en: Maximize pane
+workspace.tabs.zoom_out:
+  zh-CN: 还原分屏
+  en: Restore pane
+workspace.tabs.actions:
+  zh-CN: 标签页操作
+  en: Tab actions
+
 # The status bar.
 workspace.status.connected_to:
   zh-CN: 已连接 %{name}

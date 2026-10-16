@@ -1,13 +1,19 @@
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
-use crate::app::{CatalogIcon, ToggleHostPanel, ToggleTerminalBroadcast};
+use super::tab_bar::CenterTabBar;
+
+use crate::app::{CatalogIcon, ToggleTerminalBroadcast};
 use crate::i18n::t;
 use gpui_kit::component::dock::{
     BasePanelView, DockArea, DockAreaRenderer, DockContext, DockSkin, DropIndicator, NodeId,
     PanelState, TabGroupContext, TabGroupRenderer, TilesRenderer,
 };
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
+    ActiveTheme as _, Icon, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -18,14 +24,12 @@ use gpui_kit::*;
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct BroadcastBar {
     node: Option<NodeId>,
-    hosts_open: Option<bool>,
     enabled: bool,
     count: usize,
 }
 
 impl BroadcastBar {
     fn controls(self, target: &FocusHandle) -> impl IntoElement {
-        let hosts = target.clone();
         let broadcast = target.clone();
         let label = if !self.enabled {
             t!("workspace.broadcast.title")
@@ -34,42 +38,18 @@ impl BroadcastBar {
         } else {
             t!("workspace.broadcast.active", count = self.count)
         };
-        h_flex()
-            .flex_shrink_0()
-            .pl_2()
-            .gap_1()
-            .when_some(self.hosts_open, |row, open| {
-                row.child(
-                    Button::new("toggle-dock:Left")
-                        .ghost()
-                        .xsmall()
-                        .icon(if open {
-                            IconName::PanelLeft
-                        } else {
-                            IconName::PanelLeftOpen
-                        })
-                        .tooltip(if open {
-                            t!("workspace.title_bar.hide_sidebar")
-                        } else {
-                            t!("workspace.title_bar.show_sidebar")
-                        })
-                        .on_click(move |_, window, cx| {
-                            hosts.dispatch_action(&ToggleHostPanel, window, cx)
-                        }),
-                )
-            })
-            .child(
-                Button::new("toggle-terminal-broadcast")
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::new(CatalogIcon::Cast))
-                    .selected(self.enabled)
-                    .accessibility_label(label)
-                    .tooltip(t!("workspace.broadcast.title"))
-                    .on_click(move |_, window, cx| {
-                        broadcast.dispatch_action(&ToggleTerminalBroadcast, window, cx)
-                    }),
-            )
+        h_flex().flex_shrink_0().pl_1().child(
+            Button::new("toggle-terminal-broadcast")
+                .ghost()
+                .xsmall()
+                .icon(Icon::new(CatalogIcon::Cast))
+                .selected(self.enabled)
+                .accessibility_label(label)
+                .tooltip(t!("workspace.broadcast.title"))
+                .on_click(move |_, window, cx| {
+                    broadcast.dispatch_action(&ToggleTerminalBroadcast, window, cx)
+                }),
+        )
     }
 }
 
@@ -83,9 +63,7 @@ impl BroadcastBar {
 /// workspace keeps that in step with `DockEvent::LayoutChanged`.
 pub(super) struct WorkspaceDockSkin {
     skin: Rc<DockSkin>,
-    // Only the leading center bar replaces the built-in sidebar toggle, so
-    // its two controls can sit together. Other dock bars keep their skin.
-    center_skin: Rc<DockSkin>,
+    center_groups: Rc<RefCell<Vec<NodeId>>>,
     broadcast: Rc<Cell<BroadcastBar>>,
     target: FocusHandle,
     area: WeakEntity<DockArea>,
@@ -109,7 +87,7 @@ impl WorkspaceDockSkin {
         let area = cx.new(|cx| {
             let this = Rc::new(Self {
                 skin: DockSkin::new(cx),
-                center_skin: DockSkin::new(cx),
+                center_groups: Rc::default(),
                 broadcast: Rc::default(),
                 target,
                 area: cx.weak_entity(),
@@ -121,7 +99,6 @@ impl WorkspaceDockSkin {
         });
         // The closure above runs before `cx.new` returns.
         let skin = skin.expect("the skin is built inside the constructor");
-        skin.center_skin.set_toggle_button_visible(false, cx);
         (area, skin)
     }
 
@@ -131,19 +108,22 @@ impl WorkspaceDockSkin {
 
     pub(super) fn set_broadcast(
         &self,
+        groups: Vec<NodeId>,
         node: Option<NodeId>,
-        hosts_open: Option<bool>,
         enabled: bool,
         count: usize,
         cx: &mut App,
     ) {
         let state = BroadcastBar {
             node,
-            hosts_open,
             enabled,
             count,
         };
-        if self.broadcast.replace(state) != state {
+        let groups_changed = *self.center_groups.borrow() != groups;
+        if groups_changed {
+            self.center_groups.replace(groups);
+        }
+        if self.broadcast.replace(state) != state || groups_changed {
             _ = self.area.update(cx, |_, cx| cx.notify());
         }
     }
@@ -187,6 +167,7 @@ impl DockAreaRenderer for WorkspaceDockSkin {
                             h_flex()
                                 .h_8()
                                 .flex_shrink_0()
+                                .bg(cx.theme().tokens.tab_bar)
                                 .border_b_1()
                                 .border_color(cx.theme().border)
                                 .child(self.broadcast.get().controls(&self.target)),
@@ -218,7 +199,8 @@ impl DockAreaRenderer for WorkspaceDockSkin {
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(WorkspaceTabBar {
             skin: self.skin.tab_group_renderer(),
-            center_skin: self.center_skin.tab_group_renderer(),
+            center_groups: self.center_groups.clone(),
+            tabs: CenterTabBar::default(),
             broadcast: self.broadcast.clone(),
             target: self.target.clone(),
         })
@@ -229,11 +211,12 @@ impl DockAreaRenderer for WorkspaceDockSkin {
     }
 }
 
-/// Add the permanent broadcast toggle ahead of the leading center tab strip.
-/// Dock's renderer still owns tabs, dragging, overflow, menus and focus.
+/// Side docks keep the library skin; every center group shares one tab style.
+/// Dock owns selection, dragging, splitting and focus in both cases.
 struct WorkspaceTabBar {
     skin: Rc<dyn TabGroupRenderer>,
-    center_skin: Rc<dyn TabGroupRenderer>,
+    center_groups: Rc<RefCell<Vec<NodeId>>>,
+    tabs: CenterTabBar,
     broadcast: Rc<Cell<BroadcastBar>>,
     target: FocusHandle,
 }
@@ -257,15 +240,23 @@ impl TabGroupRenderer for WorkspaceTabBar {
         cx: &mut App,
     ) -> AnyElement {
         let state = self.broadcast.get();
-        if state.node != Some(group.node()) {
-            return self.skin.render_tab_bar(group, window, cx);
+        if self.center_groups.borrow().contains(&group.node()) {
+            let controls = (state.node == Some(group.node()))
+                .then(|| state.controls(&self.target).into_any_element());
+            return self.tabs.render(group, controls, window, cx);
         }
-        let tabs = self.center_skin.render_tab_bar(group, window, cx);
         h_flex()
             .w_full()
+            .h_8()
+            .flex_shrink_0()
+            .text_sm()
             .bg(cx.theme().tokens.tab_bar)
-            .child(state.controls(&self.target))
-            .child(div().flex_1().min_w_0().child(tabs))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.skin.render_tab_bar(group, window, cx)),
+            )
             .into_any_element()
     }
     fn render_active_panel(

@@ -286,8 +286,8 @@ impl Workspace {
                 CenterTab::Explorer(id) => editors.extend(self.editors_of(*id, cx)),
                 // A terminal's 文件 and the files it opened close with it.
                 CenterTab::Terminal(id) => {
-                    if let Some(&sidebar) = self.file_sidebars.get(id) {
-                        editors.extend(self.editors_of(sidebar, cx));
+                    if let Some(sidebar) = self.file_sidebars.get(id) {
+                        editors.extend(self.editors_of(sidebar.explorer, cx));
                     }
                 }
                 _ => {}

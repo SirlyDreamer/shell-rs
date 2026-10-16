@@ -628,6 +628,8 @@ fn render_row(
 
     ListItem::new(row_id)
         .w_full()
+        .text_sm()
+        .line_height(relative(1.))
         .px_2()
         .rounded(cx.theme().radius)
         // Make selection stronger than hover against the sidebar background.

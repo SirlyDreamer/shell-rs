@@ -29,6 +29,9 @@ impl BroadcastSelection {
         h_flex().size_5().justify_center().flex_shrink_0().child(
             Checkbox::new(id)
                 .small()
+                .size_5()
+                .items_center()
+                .justify_center()
                 .checked(self.selected)
                 .disabled(!self.available)
                 .accessibility_label(label.clone())
