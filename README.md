@@ -45,6 +45,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 - Tabbed remote and local terminals (built on `alacritty_terminal`); full-screen programs like vim and htop work as expected.
 - Each tab shows the SSH round-trip latency live.
 - Find (smart case) and local clear; configurable font, size and line height.
+- ZMODEM: `rz` and `sz` upload and download files right in the terminal, over SSH, Telnet or a serial line; drop files on a terminal to upload them.
 - Drag tabs into side-by-side or stacked splits to watch a terminal and SFTP together.
 
 **Right sidebar tools**
@@ -53,7 +54,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 - System monitor: system details, CPU (per core too), memory, network rates and disk use, refreshed every 2 seconds.
 - Network connections, processes and services: search and filter, process details, ending processes, starting, stopping and restarting systemd services, switching them on at boot, and their logs. These three and the monitor are for Linux only.
 - Docker: containers grouped by compose project, with start, stop, restart, details and logs, plus volumes, images and networks. When not root, passwordless sudo is used (for services as well).
-- Kubernetes: select a cluster from the host's kubeconfig, filter resources by namespace, inspect workloads and services, browse related pods, search container logs and copy kubectl commands. Off by default; turn it on in the settings. See the [user manual](docs/manual.en.md#kubernetes).
+- Kubernetes: select a cluster from the host's kubeconfig, filter resources by namespace, inspect workloads and services, browse related pods, search container logs and copy kubectl commands. Off by default; turn it on in the settings. See the [user manual](docs/manual.md#kubernetes).
 - Command history reads `~/.bash_history` on the host, and snippets, shared by every host, can be sorted into categories; click one to type it into the terminal, or run it straight away.
 - tmux: the host's tmux sessions, with the one the terminal is in marked; start one, attach the terminal to one or detach it, rename and end them.
 - Files: a single remote file list beside the terminal, on an SFTP channel of the terminal's own connection, following the terminal's current folder. Browse, edit and preview, drop files in to upload, and download to your Downloads folder.
@@ -72,7 +73,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 
 - Launched the way Xshell and WinSCP are: in the client of a bastion host such as JumpServer, set ShellRS as the SSH or SFTP client. An `ssh://` link opens a terminal, an `sftp://` link an SFTP tab.
 - Understands Xshell's `-url` and `-newtab` and WinSCP's `/sessionname=`. When ShellRS is already running, the link opens there.
-- What opens is an unsaved external connection: it stays out of the host list, keeps the link's password in memory only and goes away with its tabs. Each connection uses a single channel, so bastion hosts that allow no more still work. See the [user manual](docs/manual.en.md#opening-from-a-bastion-host-external-connections).
+- What opens is an unsaved external connection: it stays out of the host list, keeps the link's password in memory only and goes away with its tabs. Each connection uses a single channel, so bastion hosts that allow no more still work. See the [user manual](docs/manual.md#opening-from-a-bastion-host-external-connections).
 
 **Port forwarding**
 
@@ -127,11 +128,12 @@ Download from [shellrs.com/download](https://shellrs.com/download), which offers
 | macOS 11+ (Apple Silicon) | `ShellRS-<version>-macos-aarch64.dmg` | Signed and notarized. Open the DMG and drag ShellRS into Applications |
 | macOS 11+ (Intel) | `ShellRS-<version>-macos-x86_64.dmg` | Signed and notarized. Open the DMG and drag ShellRS into Applications |
 | Windows x64 | `ShellRS-<version>-windows-x86_64-setup.exe` | Installs per user, no administrator rights needed. The installer is not signed yet; if SmartScreen stops it, choose "More info › Run anyway" |
+| Windows x64 (portable) | `ShellRS-<version>-windows-x86_64-portable.zip` | Unzip into a folder you can write to and run `shellrs.exe`; its data stays in the `data` folder beside it. See [Windows portable](docs/manual.md#windows-portable) |
 | Linux x64 | `ShellRS-<version>-linux-x86_64.AppImage` | `chmod +x` and run. Needs glibc 2.31 or newer (Ubuntu 20.04, Debian 11 and later) |
 
 Every package comes with a minisign signature (`.minisig`), and each release has a `SHA256SUMS` file.
 
-Once installed, ShellRS keeps itself up to date: it checks, downloads and verifies new versions in the background, then shows an icon in the top-right corner of the title bar; click it and choose "Restart to update", or just quit and the update is installed on the way out. Automatic updates are unavailable when ShellRS runs from inside the DMG or outside the Applications folder, or on Linux when it isn't run as the AppImage.
+Once installed, ShellRS keeps itself up to date: it checks, downloads and verifies new versions in the background, then shows an icon in the top-right corner of the title bar; click it and choose "Restart to update", or just quit and the update is installed on the way out. Automatic updates are unavailable when ShellRS runs from inside the DMG or outside the Applications folder, on Linux when it isn't run as the AppImage, or when the Windows portable copy's folder can't be written to.
 
 ## Getting started
 
@@ -153,7 +155,7 @@ shellrs download <ID> /var/log/syslog ./logs/      # download
 shellrs sync <ID> ./dist /opt/app --delete         # sync a folder, skipping unchanged files
 ```
 
-The command hands each request to the running ShellRS, which logs in with the saved settings and keychain. An unknown host or a missing password fails right away with a stable error code instead of a prompt that would hang the agent. See the [user manual](docs/manual.en.md#external-cli) for details.
+The command hands each request to the running ShellRS, which logs in with the saved settings and keychain. An unknown host or a missing password fails right away with a stable error code instead of a prompt that would hang the agent. See the [user manual](docs/manual.md#external-cli) for details.
 
 ## Building from source
 
@@ -169,9 +171,9 @@ The first build compiles the whole GPUI stack and takes a while. See [developmen
 
 ## Documentation
 
-Apart from the user manual, the documentation is in Chinese for now:
+Apart from the user manual and the changelog, the documentation is in Chinese for now:
 
-- [User manual](docs/manual.en.md): every feature in detail, with shortcuts
+- [User manual](docs/manual.md): every feature in detail, with shortcuts
 - [Development](docs/development.md): building, testing, the data directory
 - [Releasing](docs/release.md): packaging, signing and publishing updates
 - [Changelog](CHANGELOG.md)

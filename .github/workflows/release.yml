@@ -1,4 +1,4 @@
-# Push v<version> matching Cargo.toml and CHANGELOG.md to publish on GitHub.
+# Push v<version> matching Cargo.toml and both changelogs to publish on GitHub.
 # A manual run on a branch builds artifacts only; on a version tag it also
 # publishes the release. No external signing or hosting secrets
 # are required; these packages use manual updates from this repository.
@@ -38,15 +38,21 @@ jobs:
       - name: Release notes from CHANGELOG.md
         run: |
           version=${{ steps.version.outputs.version }}
-          awk -v heading="## [$version]" '
-            index($0, heading) == 1 { found = 1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
-          if [ ! -s notes.md ]; then
-            echo "::error::CHANGELOG.md has no section ## [$version]"
-            exit 1
-          fi
+          section() {
+            awk -v heading="## [$version]" '
+              index($0, heading) == 1 { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' "$1" | sed -e '/./,$!d'
+          }
+          for changelog in CHANGELOG.md CHANGELOG.zh.md; do
+            if [ -z "$(section "$changelog")" ]; then
+              echo "::error::$changelog has no section ## [$version]"
+              exit 1
+            fi
+          done
+          section CHANGELOG.md > notes.md
+          cat notes.md
       - uses: actions/upload-artifact@v4
         with:
           name: notes
@@ -126,6 +132,28 @@ jobs:
           & $iscc "/DAppVersion=$env:VERSION" "/DBuildDir=$env:GITHUB_WORKSPACE\target\release" `
             "/O$env:GITHUB_WORKSPACE\dist" packaging\windows\shellrs.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Portable
+        shell: pwsh
+        run: |
+          # The portable zip: both programs at its root beside an empty
+          # data folder, which is what
+          # makes a copy portable. 7-Zip keeps the empty folder;
+          # Compress-Archive would drop it.
+          $folder = Join-Path $env:RUNNER_TEMP "portable"
+          New-Item -ItemType Directory -Force -Path (Join-Path $folder "data") | Out-Null
+          Copy-Item "target\release\shellrs.exe", "target\release\shellrs-cli.exe" $folder
+          $zip = "$env:GITHUB_WORKSPACE\dist\ShellRS-$env:VERSION-windows-x86_64-portable.zip"
+          Push-Location $folder
+          7z a -tzip -mx=9 $zip shellrs.exe shellrs-cli.exe data
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          # The first path listed is the archive itself.
+          $entries = 7z l -slt $zip | Select-String '^Path = ' |
+            ForEach-Object { $_.Line.Substring(7) } | Select-Object -Skip 1
+          if (Compare-Object @($entries) @('data', 'shellrs-cli.exe', 'shellrs.exe')) {
+            Write-Error "The portable zip holds: $($entries -join ', ')"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: windows

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::support::*;
 use gpui_kit::component::dock::ToggleZoom;
-use shellrs::app::{CloseSettings, PasteTerminal};
+use shellrs::app::{CloseSettings, PasteTerminal, SetBroadcastTarget};
 
 struct PerHostTerminals(HashMap<String, Arc<FakeTerminalFactory>>);
 
@@ -65,6 +65,9 @@ async fn open(cx: &mut TestAppContext) -> Fixture {
         Root::new(view, window, cx)
     });
     let workspace = workspace.unwrap();
+    // Split focus changes reach the workspace only in an active window.
+    // Headless windows start inactive, unlike a window receiving user input.
+    in_frame(cx, handle, |window, _| window.activate_window());
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
         [INITIAL_WEB_TERMINAL, INITIAL_STAGING_TERMINAL]
             .into_iter()
@@ -198,9 +201,10 @@ async fn permanent_toggle_replaces_logos_without_adding_a_toolbar(cx: &mut TestA
 }
 
 #[gpui_kit::test]
-async fn broadcast_reaches_background_tabs_and_encodes_each_terminal_mode(cx: &mut TestAppContext) {
+async fn broadcast_reaches_visible_splits_and_encodes_each_terminal_mode(cx: &mut TestAppContext) {
     let fixture = open(cx).await;
     let handle = fixture.handle;
+    split_pair(cx, handle);
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
     });
@@ -240,14 +244,23 @@ async fn broadcast_reaches_background_tabs_and_encodes_each_terminal_mode(cx: &m
     );
     assert_eq!(fixture.staging.written_text(), "中文\x1b[A\r\x03one\ntwo");
     in_frame(cx, handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx)
+        window.click(("terminal", INITIAL_STAGING_TERMINAL), cx)
     });
     in_frame(cx, handle, |window, cx| window.input("from-b", cx));
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
         fixture.web.written_text().ends_with("from-b")
     })
     .await;
+    // Focus notifications are delivered in the frame phase, then deferred
+    // to the workspace. Let that phase finish before a toolbar action.
+    in_frame(cx, handle, |_, _| {});
     in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            fixture.workspace.read(cx).active_tab(),
+            Some(CenterTab::Terminal(RemoteTerminalId(
+                INITIAL_STAGING_TERMINAL
+            )))
+        );
         window.click("toggle-terminal-broadcast", cx)
     });
     in_frame(cx, handle, |window, cx| window.input("alone", cx));
@@ -281,6 +294,28 @@ async fn checking_local_tabs_is_immediate_and_unchecking_stops_broadcast(cx: &mu
     })
     .await;
     in_frame(cx, handle, |window, cx| {
+        let from = window.find(("local-terminal-tab", 1_u64)).bounds().center();
+        let content = window.find(("local-terminal", 1_u64)).bounds();
+        window.drag(
+            from,
+            point(content.right() - px(12.), content.center().y),
+            cx,
+        );
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.find(("terminal", INITIAL_WEB_TERMINAL)).visible());
+        assert!(window.find(("local-terminal", 1_u64)).visible());
+        window.click(("local-terminal", 1_u64), cx);
+    });
+    in_frame(cx, handle, |_, _| {});
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            fixture.workspace.read(cx).active_tab(),
+            Some(CenterTab::LocalTerminal(LocalTerminalId(1)))
+        );
         window.click("toggle-terminal-broadcast", cx)
     });
     in_frame(cx, handle, |window, cx| {
@@ -336,24 +371,49 @@ async fn checking_local_tabs_is_immediate_and_unchecking_stops_broadcast(cx: &mu
 }
 
 #[gpui_kit::test]
-async fn hidden_tabs_stay_selected_but_reconnected_tabs_leave_broadcast(cx: &mut TestAppContext) {
+async fn hidden_and_reconnected_tabs_leave_broadcast_and_need_reselection(cx: &mut TestAppContext) {
     let fixture = open(cx).await;
     let handle = fixture.handle;
+    split_pair(cx, handle);
     select_pair(cx, handle);
     in_frame(cx, handle, |window, cx| {
+        window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
         window.dispatch_action(Box::new(OpenSettings), cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window.find("toggle-terminal-broadcast").label(),
+            Some("命令广播 · 勾选至少两个终端")
+        );
+        let hidden = window.find(("broadcast-remote", INITIAL_WEB_TERMINAL));
+        assert_eq!(hidden.checked(), Some(false));
+        window.click(("broadcast-remote", INITIAL_WEB_TERMINAL), cx);
+        window.dispatch_action(
+            Box::new(SetBroadcastTarget::new(
+                CenterTab::Terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL)),
+                true,
+            )),
+            cx,
+        );
     });
     in_frame(cx, handle, |window, _| {
         assert_eq!(
-            window.find("toggle-terminal-broadcast").label(),
-            Some("广播中 · 2 个终端")
-        )
+            window
+                .find(("broadcast-remote", INITIAL_WEB_TERMINAL))
+                .checked(),
+            Some(false)
+        );
     });
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(CloseSettings), cx)
     });
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        let revealed = window.find(("broadcast-remote", INITIAL_WEB_TERMINAL));
+        assert_eq!(revealed.checked(), Some(false));
+        window.click(("broadcast-remote", INITIAL_WEB_TERMINAL), cx);
     });
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(
@@ -398,13 +458,13 @@ async fn hidden_tabs_stay_selected_but_reconnected_tabs_leave_broadcast(cx: &mut
 }
 
 #[gpui_kit::test]
-async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
+async fn dragging_and_zooming_remove_hidden_broadcast_targets_without_reconnecting(
     cx: &mut TestAppContext,
 ) {
     let fixture = open(cx).await;
     let handle = fixture.handle;
-    select_pair(cx, handle);
     split_pair(cx, handle);
+    select_pair(cx, handle);
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
         window.dispatch_action(Box::new(ToggleZoom), cx);
@@ -412,15 +472,25 @@ async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
     in_frame(cx, handle, |window, cx| {
         assert_eq!(
             window.find("toggle-terminal-broadcast").label(),
-            Some("广播中 · 2 个终端")
+            Some("命令广播 · 勾选至少两个终端")
         );
         window.input("zoomed", cx);
         window.dispatch_action(Box::new(ToggleZoom), cx);
     });
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        fixture.staging.written_text() == "zoomed"
+        fixture.web.written_text() == "zoomed"
     })
     .await;
+    assert_eq!(fixture.staging.written_text(), "");
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window
+                .find(("broadcast-remote", INITIAL_STAGING_TERMINAL))
+                .checked(),
+            Some(false)
+        );
+        window.click(("broadcast-remote", INITIAL_STAGING_TERMINAL), cx);
+    });
     in_frame(cx, handle, |window, cx| {
         let from = window
             .find(("terminal-tab", INITIAL_STAGING_TERMINAL))
@@ -444,7 +514,7 @@ async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
         assert_eq!(shown, 1);
         assert_eq!(
             window.find("toggle-terminal-broadcast").label(),
-            Some("广播中 · 2 个终端")
+            Some("命令广播 · 勾选至少两个终端")
         );
         assert_eq!(
             window
@@ -452,7 +522,18 @@ async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
                 .checked(),
             Some(true)
         );
+        let hidden = window.find(("broadcast-remote", INITIAL_WEB_TERMINAL));
+        assert_eq!(hidden.checked(), Some(false));
     });
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal", INITIAL_STAGING_TERMINAL), cx);
+        window.input("after-merge", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture.staging.written_text() == "after-merge"
+    })
+    .await;
+    assert_eq!(fixture.web.written_text(), "zoomed");
     assert_eq!(fixture.web.starts(), 1);
     assert_eq!(fixture.staging.starts(), 1);
 }

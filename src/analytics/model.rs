@@ -64,6 +64,10 @@ pub enum Counter {
     /// A batch of transfers queued in an SFTP tab.
     Upload,
     Download,
+    /// Files uploaded or downloaded in a terminal with ZMODEM (`rz` /
+    /// `sz`), files dropped on one included.
+    ZmodemUpload,
+    ZmodemDownload,
     /// A file opened in the editor.
     EditorLocal,
     EditorRemote,
@@ -103,10 +107,14 @@ pub enum Counter {
     HighlightOff,
     ExternalCliOn,
     ExternalCliOff,
+    /// Hosts imported from `~/.ssh/config`, once per import.
+    ImportSshConfig,
+    /// Hosts imported from `~/.ssh/known_hosts`, once per import.
+    ImportKnownHosts,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 51] = [
+    pub const ALL: [Counter; 55] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -126,6 +134,8 @@ impl Counter {
         Self::ForwardDynamic,
         Self::Upload,
         Self::Download,
+        Self::ZmodemUpload,
+        Self::ZmodemDownload,
         Self::EditorLocal,
         Self::EditorRemote,
         Self::PreviewImage,
@@ -158,6 +168,8 @@ impl Counter {
         Self::HighlightOff,
         Self::ExternalCliOn,
         Self::ExternalCliOff,
+        Self::ImportSshConfig,
+        Self::ImportKnownHosts,
     ];
 
     pub fn key(self) -> &'static str {
@@ -181,6 +193,8 @@ impl Counter {
             Self::ForwardDynamic => "forward_dynamic",
             Self::Upload => "upload",
             Self::Download => "download",
+            Self::ZmodemUpload => "zmodem_upload",
+            Self::ZmodemDownload => "zmodem_download",
             Self::EditorLocal => "editor_local",
             Self::EditorRemote => "editor_remote",
             Self::PreviewImage => "preview_image",
@@ -213,6 +227,8 @@ impl Counter {
             Self::HighlightOff => "highlight_off",
             Self::ExternalCliOn => "external_cli_on",
             Self::ExternalCliOff => "external_cli_off",
+            Self::ImportSshConfig => "import_ssh_config",
+            Self::ImportKnownHosts => "import_known_hosts",
         }
     }
 
@@ -243,6 +259,9 @@ pub struct Snapshot {
     pub custom_shortcuts: bool,
     /// The SFTP lists' 图标风格: `monochrome` or `color`.
     pub file_icons: &'static str,
+    /// How this copy was installed: `setup`, `portable`, `bundle`,
+    /// `appimage` or `other` (`InstallKind::install_type`).
+    pub install: &'static str,
     /// How many are saved; only their band goes out.
     pub hosts: usize,
     pub credentials: usize,
@@ -269,6 +288,7 @@ impl Snapshot {
                 if self.custom_shortcuts { "yes" } else { "no" },
             ),
             ("file_icons", self.file_icons),
+            ("install", self.install),
             ("hosts", band(self.hosts)),
             ("credentials", band(self.credentials)),
             ("forwards", band(self.forwards)),
@@ -726,6 +746,7 @@ mod tests {
             dark_theme: "shellrs-dark",
             update_channel: "stable",
             file_icons: "monochrome",
+            install: "portable",
             hosts: 7,
             ..Snapshot::default()
         }
@@ -820,6 +841,7 @@ mod tests {
         assert_eq!(props["highlight"], "off");
         assert_eq!(props["custom_shortcuts"], "no");
         assert_eq!(props["file_icons"], "monochrome");
+        assert_eq!(props["install"], "portable");
         assert!(props.values().all(Value::is_string));
         assert_eq!(band(5), "1-5");
         assert_eq!(band(100), "21-100");

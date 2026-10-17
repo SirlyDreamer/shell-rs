@@ -818,7 +818,9 @@ fn external_cli_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
             .description(t!("settings.cli.enabled_description"))]),
         SettingGroup::new()
             .title(t!("settings.cli.binary"))
-            .description(if cfg!(windows) {
+            .description(if crate::app::portable_root().is_some() {
+                t!("settings.cli.binary_description_portable")
+            } else if cfg!(windows) {
                 t!("settings.cli.binary_description_windows")
             } else {
                 t!("settings.cli.binary_description")
@@ -1016,12 +1018,11 @@ fn build_description() -> String {
         (Some(commit), None) => commit.get(..7).unwrap_or(commit).to_string(),
         _ => t!("settings.about.local_build").to_string(),
     };
-    t!(
-        "settings.about.build",
-        build = build,
-        platform = platform::platform_label()
-    )
-    .to_string()
+    let mut platform = platform::platform_label(crate::app::portable_root().is_some()).to_string();
+    if crate::app::software_rendering() {
+        platform = format!("{platform} · {}", t!("settings.about.software_rendering"));
+    }
+    t!("settings.about.build", build = build, platform = platform).to_string()
 }
 
 /// Where the `shellrs` command stands, with the one thing to do about it.

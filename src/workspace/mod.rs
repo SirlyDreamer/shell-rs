@@ -10,6 +10,7 @@ mod editors;
 mod follow;
 mod forwards;
 mod front;
+mod imports;
 mod links;
 mod notices;
 mod recent_hosts;
@@ -26,6 +27,7 @@ mod tools;
 mod updates;
 mod window_state;
 mod workspace_view;
+mod zmodem;
 
 pub use links::open_link_once_open;
 pub use window_state::WindowState;

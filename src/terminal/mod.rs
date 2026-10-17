@@ -24,6 +24,7 @@ mod terminal_panel;
 mod terminal_view;
 mod theme;
 mod transport;
+mod zmodem;
 
 pub(crate) use broadcast::BroadcastSelection;
 pub use directory::ReportedDirectory;
@@ -73,3 +74,4 @@ pub use transport::{
     TelnetTerminalTransportProvider, TerminalChannels, TerminalTransport, TerminalTransportCommand,
     TerminalTransportEvent, TerminalTransportFactory,
 };
+pub use zmodem::{ZmodemDirection, ZmodemReply};

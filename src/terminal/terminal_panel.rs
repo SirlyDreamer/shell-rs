@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::{
@@ -20,7 +21,7 @@ use crate::shared::{ClosableTabTitle, HostMark, LatencyLabel, RenamableTab, clos
 
 use super::{
     HostTerminalTransports, RemoteTerminalId, ReportedDirectory, TerminalEvent, TerminalLifecycle,
-    TerminalMenuItems, TerminalNotice, TerminalStatus, TerminalView,
+    TerminalMenuItems, TerminalNotice, TerminalStatus, TerminalView, ZmodemDirection, ZmodemReply,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +37,11 @@ pub enum TerminalPanelEvent {
     Notice(RemoteTerminalId, TerminalNotice),
     /// The shell reported another folder; the right sidebar's 文件 follows.
     DirectoryChanged(RemoteTerminalId, ReportedDirectory),
+    /// `rz` or `sz` started: the user chooses, and the answer goes to
+    /// [`TerminalPanel::zmodem_reply`].
+    ZmodemAsk(RemoteTerminalId, ZmodemDirection),
+    /// Files dropped on the terminal, for [`TerminalPanel::upload_dropped`].
+    FilesDropped(RemoteTerminalId, Vec<PathBuf>),
 }
 
 /// A remote-host Dock panel backed by the shared terminal engine: an SSH
@@ -99,7 +105,8 @@ impl TerminalPanel {
                 host.address_is_ip(),
                 store.clone(),
             ));
-            terminal.set_reconnect_action(ReconnectTerminal(id), cx);
+            terminal.set_ended_actions(ReconnectTerminal(id), CloseTerminal(id), cx);
+            terminal.take_dropped_files();
             terminal
         });
         let presentation = terminal.read(cx).presentation(cx);
@@ -142,6 +149,12 @@ impl TerminalPanel {
                             this.id,
                             directory.clone(),
                         ));
+                    }
+                    TerminalEvent::ZmodemAsk(direction) => {
+                        cx.emit(TerminalPanelEvent::ZmodemAsk(this.id, *direction));
+                    }
+                    TerminalEvent::FilesDropped(files) => {
+                        cx.emit(TerminalPanelEvent::FilesDropped(this.id, files.clone()));
                     }
                 },
             ),
@@ -258,6 +271,22 @@ impl TerminalPanel {
         });
     }
 
+    /// What the user chose for the transfer `rz` or `sz` started.
+    pub fn zmodem_reply(&self, reply: ZmodemReply, cx: &App) {
+        self.terminal.read(cx).zmodem_reply(reply, cx);
+    }
+
+    /// Upload `files`, dropped on the terminal, with ZMODEM: `rz` typed for
+    /// them. Says why not.
+    pub fn upload_dropped(
+        &mut self,
+        files: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), SharedString> {
+        self.terminal
+            .update(cx, |terminal, cx| terminal.upload_dropped(files, cx))
+    }
+
     /// 发送 Break, for a Telnet or serial host's terminal.
     pub fn send_break(&self, cx: &App) {
         if self.host.kind().sends_break() {
@@ -327,7 +356,7 @@ impl Panel for TerminalPanel {
         let (address, os) = (self.host.address.clone(), self.host.os);
         let tab_menu = self.tab_menu(cx);
         let state = self.connection_state(cx);
-        let mark = match self.broadcast {
+        let mark = match self.broadcast.clone() {
             Some(selection) => selection
                 .render(CenterTab::Terminal(id), self.tab_title(cx))
                 .into_any_element(),

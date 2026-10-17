@@ -33,6 +33,10 @@ gpui_kit::actions!(
         QuickConnect,
         /// Open the new-group dialog for a top-level group.
         NewGroup,
+        /// Open the import dialog for the hosts `~/.ssh/config` names.
+        ImportSshConfig,
+        /// Open the import dialog for the hosts `~/.ssh/known_hosts` names.
+        ImportKnownHosts,
         /// Open a new local login-shell terminal.
         NewLocalTerminal,
         /// Replace terminal tab marks with broadcast membership checkboxes.

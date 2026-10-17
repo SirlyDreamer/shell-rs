@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -160,7 +161,7 @@ pub struct Workspace {
     pub(super) sidebar: Entity<Sidebar>,
     /// The right dock's panel: the tools for the host of the tab in front.
     pub(super) tools: Entity<ToolSidebar>,
-    host_panel: Entity<HostPanel>,
+    pub(super) host_panel: Entity<HostPanel>,
     /// The port forwards that are running, each on a connection of its own.
     pub(super) forwards: Entity<ForwardManager>,
     /// The start page the dock skin shows while the center has no tab.
@@ -229,6 +230,10 @@ pub struct Workspace {
     /// The pending write of the window's size and place, see
     /// `window_state.rs`.
     pub(super) window_state_save: Option<Task<()>>,
+    /// Where 导入 reads `~/.ssh/config` and `known_hosts`. Production only:
+    /// UI tests hand in a temporary one, so nothing reads the home
+    /// directory.
+    pub(super) ssh_dir: Option<PathBuf>,
     pub(super) _subscriptions: Vec<Subscription>,
 }
 
@@ -272,6 +277,7 @@ impl Workspace {
             window,
             cx,
         );
+        this.ssh_dir = dirs::home_dir().map(|home| home.join(".ssh"));
         this.cli_integration.update(cx, |integration, cx| {
             integration.set_paths(IntegrationPaths::system(), cx);
             integration.update_outdated(cx);
@@ -590,6 +596,7 @@ impl Workspace {
             next_editor_id: 1,
             notice_times: HashMap::new(),
             window_state_save: None,
+            ssh_dir: None,
             _subscriptions: subscriptions,
         }
     }
@@ -2490,6 +2497,12 @@ fn new_terminal_panel(
             TerminalPanelEvent::DirectoryChanged(terminal_id, directory) => {
                 this.follow_directory(*terminal_id, directory, window, cx)
             }
+            TerminalPanelEvent::ZmodemAsk(terminal_id, direction) => {
+                this.ask_zmodem(CenterTab::Terminal(*terminal_id), *direction, window, cx)
+            }
+            TerminalPanelEvent::FilesDropped(terminal_id, files) => {
+                this.upload_dropped(*terminal_id, files, window, cx)
+            }
         },
     );
     (panel, subscription)
@@ -2671,6 +2684,9 @@ fn new_local_terminal_panel(
             LocalTerminalPanelEvent::Notice(id, notice) => {
                 this.on_terminal_notice(CenterTab::LocalTerminal(*id), notice, window, cx)
             }
+            LocalTerminalPanelEvent::ZmodemAsk(id, direction) => {
+                this.ask_zmodem(CenterTab::LocalTerminal(*id), *direction, window, cx)
+            }
         },
     );
     (panel, subscription)
@@ -2747,6 +2763,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_delete_host))
             .on_action(cx.listener(Self::on_new_host_in_group))
             .on_action(cx.listener(Self::on_new_group))
+            .on_action(cx.listener(Self::on_import_ssh_config))
+            .on_action(cx.listener(Self::on_import_known_hosts))
             .on_action(cx.listener(Self::on_expand_all_groups))
             .on_action(cx.listener(Self::on_collapse_all_groups))
             .on_action(cx.listener(Self::on_new_child_group))

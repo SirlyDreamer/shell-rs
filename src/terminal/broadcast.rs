@@ -5,21 +5,24 @@ use crate::i18n::t;
 use gpui_kit::component::{Disableable as _, Sizable as _, checkbox::Checkbox, h_flex};
 use gpui_kit::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct BroadcastSelection {
     selected: bool,
     available: bool,
+    target: FocusHandle,
 }
 
 impl BroadcastSelection {
-    pub(crate) fn new(selected: bool, available: bool) -> Self {
+    pub(crate) fn new(selected: bool, available: bool, target: FocusHandle) -> Self {
         Self {
             selected,
             available,
+            target,
         }
     }
 
     pub(super) fn render(self, tab: CenterTab, name: SharedString) -> impl IntoElement {
+        let target = self.target;
         let id = match tab {
             CenterTab::Terminal(id) => ("broadcast-remote", id.0),
             CenterTab::LocalTerminal(id) => ("broadcast-local", id.0),
@@ -44,7 +47,7 @@ impl BroadcastSelection {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_change(move |selected, window, cx| {
                     cx.stop_propagation();
-                    window.dispatch_action(Box::new(SetBroadcastTarget::new(tab, *selected)), cx);
+                    target.dispatch_action(&SetBroadcastTarget::new(tab, *selected), window, cx);
                 }),
         )
     }

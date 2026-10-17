@@ -1,5 +1,6 @@
 //! Dock owns tab dragging. The workspace owns the explicitly checked, live
-//! connections that share interactive input; reconnects never inherit membership.
+//! visible connections that share interactive input. Hidden and reconnected
+//! terminals leave the selection and must be checked again.
 
 use super::Workspace;
 use crate::app::{CenterTab, SetBroadcastTarget, ToggleTerminalBroadcast};
@@ -31,16 +32,8 @@ impl Workspace {
     }
 
     fn broadcast_candidates(&self, cx: &App) -> Vec<(CenterTab, u64)> {
-        self.terminals
-            .keys()
-            .copied()
-            .map(CenterTab::Terminal)
-            .chain(
-                self.local_terminals
-                    .keys()
-                    .copied()
-                    .map(CenterTab::LocalTerminal),
-            )
+        self.visible_center_tabs(cx)
+            .into_iter()
             .filter_map(|tab| {
                 let view = self.terminal_view_for_tab(tab, cx)?;
                 let view = view.read(cx);
@@ -62,6 +55,7 @@ impl Workspace {
                         .iter()
                         .any(|(target, _)| *target == tab),
                     available.iter().any(|(target, _)| *target == tab),
+                    self.focus_handle.clone(),
                 )
             })
         };
@@ -104,9 +98,11 @@ impl Workspace {
         event: &TerminalInputEvent,
         cx: &mut Context<Self>,
     ) {
+        if !self.broadcast.enabled || self.broadcast.selected.len() < 2 {
+            return;
+        }
         self.sync_broadcast(cx);
-        if !self.broadcast.enabled
-            || self.broadcast.selected.len() < 2
+        if self.broadcast.selected.len() < 2
             || !self
                 .broadcast
                 .selected
