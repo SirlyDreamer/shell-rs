@@ -418,7 +418,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - 计数只能是 `Counter` 的变体，快照字段只有 `&'static str`、开关和数量，用户输入的东西放不进去。计数的键发布后不能改，新加的要同步 `docs/manual.md`「隐私」一节的清单。
   - UI 线程只往通道里发信号；系统检测（`os_info` 会起 `uname` 等子进程）、HTTP、写 `analytics.json` 都在 `shellrs-analytics` 线程上，退出不冲队列。
   - SSH 连上靠 `TerminalEvent::Started` → `TerminalPanelEvent::Connected`，不能在每批输出都发的 `StatusChanged` 里记；SFTP 看 `StateChanged` 时的 `connection_state()`（右侧栏的「文件」不算，它计 `tool_files`）。外部 CLI 的请求种类由 `CliServer::take_usage` 交给 `serve_cli` 的轮询。
-- **发布走 tag** `v<版本>`（`release.yml`，需要人工批准，清单最后才上传）。`CHANGELOG.md` 那一节由改版本号的提交写，功能提交不改。一次性准备见 `docs/release.md`。
+- **发布走 tag** `v<版本>`（`release.yml`，由 GitHub Actions 构建全部平台后创建 GitHub Release 并上传安装包和校验文件；不使用 Cloudflare 或上游更新清单）。`CHANGELOG.md` 那一节由改版本号的提交写，功能提交不改。一次性准备见 `docs/release.md`。
 - **macOS 上关窗口是隐藏**（`hide_when_closed`），⌘Q 才退出。测试平台的 `hide()` 没实现，所以这条只挂在生产路径上。
 
 ### 终端

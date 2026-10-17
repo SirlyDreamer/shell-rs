@@ -31,7 +31,13 @@ on:
       - "src/sftp/sync.rs"
       - "src/credential/credential_dialog.rs"
       - "src/settings/settings_panel.rs"
-      - "src/terminal/local_shell.rs"
+      - "src/terminal/**"
+      - "src/workspace/front.rs"
+      - "src/workspace/tools.rs"
+      - "tests/ui/terminal.rs"
+      - "tests/ui/terminal_groups.rs"
+      - "vendor/gpui-pre-windows/**"
+      - ".github/workflows/windows.yml"
       - "src/serial/**"
       - "src/app/shortcuts.rs"
       - "src/workspace/window_state.rs"
@@ -60,6 +66,10 @@ jobs:
       - uses: ilammy/setup-nasm@v1
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked -p gpui-pre-windows partial_warp -- --nocapture
+      - run: "cargo test --locked --lib terminal::"
+      - run: "cargo test --locked --test ui terminal::"
+      - run: "cargo test --locked --test ui terminal_groups::"
       - run: "cargo test --locked --lib ssh::"
       - run: "cargo test --locked --test ui connection::"
       - run: "cargo test --lib cli::"

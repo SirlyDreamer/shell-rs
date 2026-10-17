@@ -2,7 +2,7 @@
 
 [返回 README](../README.zh-CN.md)
 
-在 `CHANGELOG.md` 里写好 `## [x.y.z]` 一节，把 `Cargo.toml` 与 `Cargo.lock` 中 ShellRS 的版本改成 `x.y.z`，提交后推送标签 `vx.y.z`。沿用原有版本格式，例如 `0.1.11-beta.3`。
+在 `CHANGELOG.md` 里写好 `## [x.y.z]` 一节，把 `Cargo.toml` 与 `Cargo.lock` 中 ShellRS 的版本改成 `x.y.z`，提交后推送标签 `vx.y.z`。沿用原有版本格式，例如 `0.1.11-beta.4`。
 
 `.github/workflows/release.yml` 只通过 GitHub 发布：
 
