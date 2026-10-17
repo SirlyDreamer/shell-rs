@@ -1,5 +1,6 @@
 # Push v<version> matching Cargo.toml and CHANGELOG.md to publish on GitHub.
-# A manual run builds artifacts only. No external signing or hosting secrets
+# A manual run on a branch builds artifacts only; on a version tag it also
+# publishes the release. No external signing or hosting secrets
 # are required; these packages use manual updates from this repository.
 name: release
 

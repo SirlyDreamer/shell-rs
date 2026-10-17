@@ -11,7 +11,7 @@
 3. macOS 生成 `.app.zip` 和 `.dmg`，Windows 使用 Inno Setup 生成安装程序，Linux 生成 AppImage；Linux 要求 glibc 2.31 或更新版本。
 4. 所有构建成功后生成 `SHA256SUMS`，用 GitHub 自带的 `GITHUB_TOKEN` 创建当前仓库的 Release，上传全部安装包和校验文件。
 
-版本号带 `-` 的发布为 GitHub prerelease，正式版本发布为普通 Release。手动运行 workflow 只生成 Actions 构建产物，不创建 Release。如果同版本 Release 已经手动创建，发布任务会补充或替换同名安装包与校验文件。
+版本号带 `-` 的发布为 GitHub prerelease，正式版本发布为普通 Release。手动以分支运行 workflow 只生成 Actions 构建产物；以已有版本标签运行时，同样会创建 Release 并上传附件，可用于标签推送未自动触发运行时。如果同版本 Release 已经创建，发布任务会补充或替换同名安装包与校验文件。
 
 此流程不需要额外 secret 或 `release` 审批环境，不再调用 Cloudflare/R2、CDN 缓存刷新、官网部署挂钩和更新清单发布。构建阶段只需仓库读取权限，发布任务单独申请 `contents: write`。
 
