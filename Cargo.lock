@@ -340,6 +340,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.3.1",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -1120,6 +1121,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "chacha20poly1305"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"
+dependencies = [
+ "aead",
+ "chacha20",
+ "cipher 0.5.2",
+ "poly1305",
+ "zeroize",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1591,6 +1605,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8498c871161e1742aaa9d52551b2d6ebdd4c3d45a3be423e3728f33b955be550"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -2762,6 +2785,23 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
+name = "global-hotkey"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adda8c76a5139df3bae0eb0413c2cd746f66594e0bb66231a4daa0be3172da70"
+dependencies = [
+ "crossbeam-channel",
+ "keyboard-types",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "once_cell",
+ "thiserror 2.0.20",
+ "windows-sys 0.59.0",
+ "x11rb",
+ "xkeysym",
+]
 
 [[package]]
 name = "globset"
@@ -4295,6 +4335,16 @@ checksum = "01737161ba802849cfd486b5bd209d38ba4943494c249a8126005170c7621edd"
 dependencies = [
  "crypto-common 0.2.2",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "keyboard-types"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fbe853b403ae61a04233030ae8a79d94975281ed9770a1f9e246732b534b28d"
+dependencies = [
+ "bitflags 2.13.2",
+ "serde",
 ]
 
 [[package]]
@@ -7749,7 +7799,7 @@ dependencies = [
 
 [[package]]
 name = "shellrs"
-version = "0.1.13-beta.3"
+version = "0.1.15"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7762,6 +7812,7 @@ dependencies = [
  "dunce",
  "flate2",
  "futures",
+ "global-hotkey",
  "gpui-kit",
  "keyring",
  "libc",
@@ -7774,6 +7825,7 @@ dependencies = [
  "percent-encoding",
  "portable-pty",
  "rand 0.9.5",
+ "raw-window-handle",
  "regex",
  "reqwest",
  "rusqlite",
@@ -7786,6 +7838,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial2",
  "sha2 0.10.9",
+ "shellrs-sync",
  "sys-locale",
  "tempfile",
  "tokio",
@@ -7799,6 +7852,25 @@ dependencies = [
  "zeroize",
  "zip",
  "zmodem2",
+]
+
+[[package]]
+name = "shellrs-sync"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "flate2",
+ "getrandom 0.3.4",
+ "hmac 0.13.0",
+ "quick-xml",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "unicode-normalization",
+ "zeroize",
 ]
 
 [[package]]
@@ -9144,6 +9216,15 @@ name = "unicode-linebreak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-properties"

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::support::*;
 use gpui_kit::component::dock::ToggleZoom;
-use shellrs::app::{CloseSettings, PasteTerminal, SetBroadcastTarget};
+use shellrs::app::{CloseSettings, PasteTerminal, SetBroadcastTarget, ToggleComposePane};
 
 struct PerHostTerminals(HashMap<String, Arc<FakeTerminalFactory>>);
 
@@ -269,6 +269,91 @@ async fn broadcast_reaches_visible_splits_and_encodes_each_terminal_mode(cx: &mu
     })
     .await;
     assert!(fixture.web.written_text().ends_with("from-b"));
+}
+
+#[gpui_kit::test]
+async fn compose_is_manual_and_closing_it_keeps_visible_terminal_broadcast(
+    cx: &mut TestAppContext,
+) {
+    let fixture = open(cx).await;
+    let handle = fixture.handle;
+    split_pair(cx, handle);
+    select_pair(cx, handle);
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.try_find("compose-pane").is_none());
+        window.dispatch_action(Box::new(ToggleComposePane), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.find("compose-pane").visible());
+        window.input("echo composed", cx);
+    });
+    // Editing a command does not send its keystrokes to the terminals.
+    assert_eq!(fixture.web.written_text(), "");
+    assert_eq!(fixture.staging.written_text(), "");
+    in_frame(cx, handle, |window, cx| window.click("compose-send", cx));
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture.web.written_text().ends_with('\r') && fixture.staging.written_text().ends_with('\r')
+    })
+    .await;
+    assert_eq!(
+        fixture.web.written_text(),
+        "\x1b[200~echo composed\x1b[201~\r"
+    );
+    assert_eq!(fixture.staging.written_text(), "echo composed\r");
+    in_frame(cx, handle, |window, cx| window.click("compose-close", cx));
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.try_find("compose-pane").is_none());
+        assert_eq!(
+            window.find("toggle-terminal-broadcast").label(),
+            Some("广播中 · 2 个终端")
+        );
+        window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
+        window.input("still-shared", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture.web.written_text().ends_with("still-shared")
+            && fixture.staging.written_text().ends_with("still-shared")
+    })
+    .await;
+    // Zooming a split removes hidden recipients. Restoring the layout
+    // shows the bottom dock again without reselecting those terminals.
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(ToggleComposePane), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
+        window.dispatch_action(Box::new(ToggleZoom), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert!(
+            window
+                .try_find(("terminal", INITIAL_STAGING_TERMINAL))
+                .is_none_or(|terminal| !terminal.visible())
+        );
+        window.dispatch_action(Box::new(ToggleZoom), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window
+                .find(("broadcast-remote", INITIAL_STAGING_TERMINAL))
+                .checked(),
+            Some(false)
+        );
+        window.click("compose-pane", cx);
+        window.input("only-visible", cx);
+        window.click("compose-send", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture
+            .web
+            .written_text()
+            .ends_with("only-visible\x1b[201~\r")
+    })
+    .await;
+    assert_eq!(
+        fixture.staging.written_text(),
+        "echo composed\rstill-shared"
+    );
 }
 
 #[gpui_kit::test]

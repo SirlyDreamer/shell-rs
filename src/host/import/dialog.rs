@@ -72,7 +72,7 @@ pub fn open_import_dialog(
                 ImportSource::SshConfig => t!("host.import.title.ssh_config"),
                 ImportSource::KnownHosts => t!("host.import.title.known_hosts"),
             })
-            .w(rems(64.)
+            .w(rems(72.)
                 .to_pixels(window.rem_size())
                 .min(viewport.width * 0.94))
             .margin_top(viewport.height * 0.05)
@@ -537,12 +537,14 @@ impl ImportDialog {
         // shows its values as text, like any other saved row.
         let editors = self.editors.get(&ix).filter(|_| !row.existing);
         let text = |id: &'static str, value: String| {
+            let full = value.clone();
             div()
                 .id((id, ix))
                 .test_support()
                 .aria_label(value.clone())
                 .truncate()
                 .text_color(muted)
+                .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
                 .child(value)
                 .into_any_element()
         };
@@ -591,27 +593,35 @@ impl ImportDialog {
             text("import-auth", label.to_string())
         } else {
             let this = cx.entity().downgrade();
-            Button::new(("import-auth", ix))
-                .outline()
-                .small()
+            // The menu wraps the button in a box as wide as the label; the
+            // column stretches that box to the cell, so a long credential
+            // ends in an ellipsis instead of running over 状态. The tooltip
+            // has it in full.
+            v_flex()
                 .w_full()
-                .dropdown_caret(true)
-                .label(label.clone())
-                .tooltip(label)
-                .dropdown_menu(move |menu, window, cx| {
-                    let Some(view) = this.upgrade() else {
-                        return menu;
-                    };
-                    let (choices, chosen) = {
-                        let dialog = view.read(cx);
-                        let chosen = dialog.rows.get(ix).map(|row| row.auth);
-                        (dialog.auth_choices(ix, cx), chosen)
-                    };
-                    let menu = menu
-                        .max_h(rems(20.).to_pixels(window.rem_size()))
-                        .scrollable(true);
-                    auth_menu(menu, choices, chosen, view.downgrade(), ix)
-                })
+                .child(
+                    Button::new(("import-auth", ix))
+                        .outline()
+                        .small()
+                        .w_full()
+                        .dropdown_caret(true)
+                        .label(label.clone())
+                        .tooltip(label)
+                        .dropdown_menu(move |menu, window, cx| {
+                            let Some(view) = this.upgrade() else {
+                                return menu;
+                            };
+                            let (choices, chosen) = {
+                                let dialog = view.read(cx);
+                                let chosen = dialog.rows.get(ix).map(|row| row.auth);
+                                (dialog.auth_choices(ix, cx), chosen)
+                            };
+                            let menu = menu
+                                .max_h(rems(20.).to_pixels(window.rem_size()))
+                                .scrollable(true);
+                            auth_menu(menu, choices, chosen, view.downgrade(), ix)
+                        }),
+                )
                 .into_any_element()
         };
         let status = if row.existing {
@@ -626,6 +636,7 @@ impl ImportDialog {
             .when(row.existing, |status| status.text_color(muted))
             .child(status)
             .into_any_element();
+        let full_address = row.candidate.address.clone();
         let address = div()
             .id(("import-address", ix))
             .test_support()
@@ -633,6 +644,7 @@ impl ImportDialog {
             .truncate()
             .font_family(theme.mono_font_family.clone())
             .when(row.existing, |address| address.text_color(muted))
+            .tooltip(move |window, cx| Tooltip::new(full_address.clone()).build(window, cx))
             .child(row.candidate.address.clone())
             .into_any_element();
         let port = div()
@@ -783,7 +795,7 @@ fn row_frame(frame: Stateful<Div>, checkbox: AnyElement, cells: [AnyElement; 7])
         .child(cell(None, address))
         .child(cell(Some(3.5), port))
         .child(cell(Some(7.), user))
-        .child(cell(Some(11.), auth))
+        .child(cell(Some(14.), auth))
         .child(cell(Some(4.5), status))
 }
 

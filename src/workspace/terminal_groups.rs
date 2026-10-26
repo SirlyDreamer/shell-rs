@@ -4,6 +4,7 @@
 
 use super::Workspace;
 use crate::app::{CenterTab, SetBroadcastTarget, ToggleTerminalBroadcast};
+use crate::shared::RenamableTab as _;
 use crate::terminal::{BroadcastSelection, TerminalInputEvent, TerminalView};
 use gpui_kit::component::dock::{DockPlacement, PaneRef};
 use gpui_kit::*;
@@ -18,9 +19,51 @@ impl TerminalBroadcast {
     fn reconcile(&mut self, available: &[(CenterTab, u64)]) {
         self.selected.retain(|target| available.contains(target));
     }
+
+    pub(super) fn active(&self) -> bool {
+        self.enabled && self.selected.len() >= 2
+    }
+
+    pub(super) fn count(&self) -> usize {
+        self.selected.len()
+    }
+}
+
+/// A visible terminal to which the manually opened compose pane sends.
+pub(super) struct Recipient {
+    pub(super) view: Entity<TerminalView>,
+    pub(super) name: SharedString,
 }
 
 impl Workspace {
+    pub(super) fn recipient(&self, tab: CenterTab, cx: &App) -> Option<Recipient> {
+        match tab {
+            CenterTab::Terminal(id) => {
+                let panel = self.terminals.get(&id)?.read(cx);
+                Some(Recipient {
+                    view: panel.terminal().clone(),
+                    name: panel.tab_title(cx),
+                })
+            }
+            CenterTab::LocalTerminal(id) => {
+                let panel = self.local_terminals.get(&id)?.read(cx);
+                Some(Recipient {
+                    view: panel.terminal().clone(),
+                    name: panel.display_title(cx),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn broadcast_recipients(&self, cx: &App) -> Vec<Recipient> {
+        self.broadcast
+            .selected
+            .iter()
+            .filter_map(|(tab, _)| self.recipient(*tab, cx))
+            .collect()
+    }
+
     fn terminal_view_for_tab(&self, tab: CenterTab, cx: &App) -> Option<Entity<TerminalView>> {
         match tab {
             CenterTab::Terminal(id) => Some(self.terminals.get(&id)?.read(cx).terminal().clone()),
@@ -137,6 +180,7 @@ impl Workspace {
         };
         self.sync_broadcast(cx);
         self.focus_center(window, cx);
+        self.sync_compose(window, cx);
         cx.notify();
     }
 
@@ -162,6 +206,7 @@ impl Workspace {
         }
         self.sync_broadcast(cx);
         self.focus_center(window, cx);
+        self.sync_compose(window, cx);
         cx.notify();
     }
 }

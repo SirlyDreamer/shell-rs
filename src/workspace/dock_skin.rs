@@ -239,6 +239,11 @@ impl TabGroupRenderer for WorkspaceTabBar {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
+        if let [panel] = group.panels()
+            && panel.panel_name(cx) == "ComposePane"
+        {
+            return Empty.into_any_element();
+        }
         let state = self.broadcast.get();
         if self.center_groups.borrow().contains(&group.node()) {
             let controls = (state.node == Some(group.node()))

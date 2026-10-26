@@ -30,6 +30,7 @@ use crate::explorer::{FileIcon, FileIconKind};
 use crate::i18n::t;
 use crate::sftp::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE};
 use crate::shared::{ClosableTabTitle, close_tab_items};
+use crate::sync::SyncService;
 use crate::terminal::{
     FONT_SIZE_RANGE, LINE_HEIGHT_RANGE, TerminalColors, TerminalFont, TerminalFontPreview,
     TerminalHighlights, is_font_installed, monospace_font_families,
@@ -65,6 +66,8 @@ pub struct SettingsPanel {
     integration: Entity<CliIntegration>,
     /// Where updating stands, for 关于.
     updater: Entity<Updater>,
+    /// Where sync stands, for 同步.
+    sync: Entity<SyncService>,
     /// The rule table of 关键字高亮, whose fields keep their state across
     /// the page's renders.
     highlight_rules: Entity<HighlightRulesEditor>,
@@ -81,7 +84,7 @@ pub struct SettingsPanel {
     shown_category: Rc<Cell<usize>>,
     focus_handle: FocusHandle,
     tab_group: Option<WeakEntity<TabGroup>>,
-    _subscriptions: [Subscription; 5],
+    _subscriptions: [Subscription; 6],
     _font_scan: Task<()>,
 }
 
@@ -90,6 +93,7 @@ impl SettingsPanel {
         store: Entity<SettingsStore>,
         integration: Entity<CliIntegration>,
         updater: Entity<Updater>,
+        sync: Entity<SyncService>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -102,6 +106,7 @@ impl SettingsPanel {
             cx.observe(&local_shell, |_, _, cx| cx.notify()),
             cx.observe(&integration, |_, _, cx| cx.notify()),
             cx.observe(&updater, |_, _, cx| cx.notify()),
+            cx.observe(&sync, |_, _, cx| cx.notify()),
         ];
         // Loading every family takes a moment the first time; the process
         // keeps the answer, so later tabs have it at once.
@@ -119,6 +124,7 @@ impl SettingsPanel {
             store,
             integration,
             updater,
+            sync,
             highlight_rules,
             shortcuts,
             local_shell,
@@ -250,7 +256,7 @@ struct Category {
 type CategoryGroups = fn(&SettingsPanel, &App) -> Vec<SettingGroup>;
 
 /// The categories, in the order the left column lists them.
-const CATEGORIES: [Category; 8] = [
+const CATEGORIES: [Category; 9] = [
     Category {
         title: "settings.category.appearance",
         icon: CatalogIcon::Palette,
@@ -280,6 +286,11 @@ const CATEGORIES: [Category; 8] = [
         title: "settings.category.external_cli",
         icon: CatalogIcon::SquareTerminal,
         groups: external_cli_groups,
+    },
+    Category {
+        title: "settings.category.sync",
+        icon: CatalogIcon::CloudSync,
+        groups: sync_groups,
     },
     Category {
         title: "settings.category.application",
@@ -428,26 +439,44 @@ fn terminal_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
     ]
 }
 
-/// 终端 → 本地终端: the program a local terminal runs. The row stacks, so a
-/// path with its arguments has the page's width.
+/// 终端 → 本地终端: the program a local terminal runs, and whether 项目's
+/// terminals keep their output. The shell's row stacks, so a path with its
+/// arguments has the page's width.
 fn local_terminal_group(panel: &SettingsPanel) -> SettingGroup {
     let (editor, reset) = (panel.local_shell.clone(), panel.local_shell.clone());
     let store = panel.store.clone();
+    let (reader, writer) = (panel.store.clone(), panel.store.clone());
     SettingGroup::new()
         .title(t!("settings.local_terminal.title"))
-        .items([SettingItem::new(
-            t!("settings.local_terminal.shell"),
-            SettingField::render(move |options, _, cx| local_shell_field(&editor, options, cx))
-                .on_reset(
-                    move |cx| store.read(cx).settings().local_terminal.shell.is_some(),
-                    move |window, cx| {
-                        reset.update(cx, |editor, cx| editor.choose(None, window, cx));
+        .items([
+            SettingItem::new(
+                t!("settings.local_terminal.shell"),
+                SettingField::render(move |options, _, cx| local_shell_field(&editor, options, cx))
+                    .on_reset(
+                        move |cx| store.read(cx).settings().local_terminal.shell.is_some(),
+                        move |window, cx| {
+                            reset.update(cx, |editor, cx| editor.choose(None, window, cx));
+                        },
+                    ),
+            )
+            .description(t!("settings.local_terminal.shell_description"))
+            .layout(Axis::Vertical)
+            .keywords(keywords(t!("settings.local_terminal.keywords"))),
+            SettingItem::new(
+                t!("settings.local_terminal.keep_output"),
+                SettingField::switch(
+                    move |cx| reader.read(cx).settings().local_terminal.keep_output,
+                    move |on, cx| {
+                        writer.update(cx, |store, cx| {
+                            store.update(|settings| settings.local_terminal.keep_output = on, cx)
+                        });
                     },
-                ),
-        )
-        .description(t!("settings.local_terminal.shell_description"))
-        .layout(Axis::Vertical)
-        .keywords(keywords(t!("settings.local_terminal.keywords")))])
+                )
+                .default_value(true),
+            )
+            .description(t!("settings.local_terminal.keep_output_description"))
+            .keywords(keywords(t!("settings.local_terminal.keep_output_keywords"))),
+        ])
 }
 
 /// 终端 → 终端交互: what the mouse does besides selecting.
@@ -744,6 +773,11 @@ fn highlight_preview_item() -> SettingItem {
 /// 键盘快捷键.
 fn shortcuts_groups(panel: &SettingsPanel, _: &App) -> Vec<SettingGroup> {
     shortcut_groups(&panel.shortcuts)
+}
+
+/// 同步.
+fn sync_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
+    super::sync_page::sync_groups(&panel.sync, cx)
 }
 
 /// 应用 → 窗口: what the next launch restores of the main window.

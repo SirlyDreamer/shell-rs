@@ -272,6 +272,9 @@ impl TerminalEngine {
                 }
             }
             TerminalUiEventKind::Latency(latency) => self.latency = Some(latency),
+            TerminalUiEventKind::WorkingDirectory(folder) => {
+                return Some(TerminalEvent::WorkingDirectory(folder));
+            }
             TerminalUiEventKind::Prompt(prompt) => {
                 return Some(TerminalEvent::PromptRequested(prompt));
             }
@@ -578,6 +581,12 @@ impl TerminalEngine {
         self.runtime.term.lock().selection_to_string()
     }
 
+    /// The last lines of output, to draw again when the terminal next
+    /// opens; `None` while a full-screen program has the screen.
+    pub fn kept_output(&self) -> Option<Vec<u8>> {
+        super::kept_output::kept_output(&self.runtime.term.lock(), super::KEPT_LINES)
+    }
+
     pub fn has_selection(&self) -> bool {
         self.selection_text().is_some_and(|text| !text.is_empty())
     }
@@ -814,6 +823,9 @@ pub enum TerminalEvent {
     Notice(TerminalNotice),
     /// The shell reported another folder than the last one.
     DirectoryChanged(ReportedDirectory),
+    /// A local shell is in another folder than the last one, as this
+    /// computer tells.
+    WorkingDirectory(PathBuf),
     /// `rz` or `sz` started on the other end: the user chooses the files
     /// to upload or the folder to download into, and the answer goes to
     /// [`TerminalEngine::zmodem_reply`].
@@ -918,6 +930,17 @@ impl TerminalRuntime {
                             parser.proxy.send(TerminalUiEventKind::Started);
                         }
                         TerminalTransportEvent::Output(bytes) => {
+                            // Files dropped on the terminal come as a control
+                            // sent before the `rz` typed for them, but its
+                            // answer may be here with the control still
+                            // waiting: `receive` takes the output first
+                            // whenever both have come, as a busy thread finds
+                            // them. The controls are read first, so the files
+                            // are there when the header is.
+                            while let Ok(control) = zmodem_controls.try_recv() {
+                                let fed = parser.zmodem.control(control, Instant::now());
+                                parser.transfer(fed);
+                            }
                             // `exec --terminal` reads the output for its
                             // markers: no transfer starts under it.
                             let detect = !lock_run(&parser.run)
@@ -932,6 +955,15 @@ impl TerminalRuntime {
                         }
                         TerminalTransportEvent::Latency(latency) => {
                             parser.proxy.send(TerminalUiEventKind::Latency(latency));
+                        }
+                        TerminalTransportEvent::WorkingDirectory(folder) => {
+                            parser
+                                .proxy
+                                .send(TerminalUiEventKind::WorkingDirectory(folder));
+                        }
+                        TerminalTransportEvent::Replay(bytes) => {
+                            parser.processor.advance(&mut *parser.term.lock(), &bytes);
+                            parser.proxy.wakeup();
                         }
                         TerminalTransportEvent::Prompt(prompt) => {
                             parser.proxy.send(TerminalUiEventKind::Prompt(prompt));
@@ -1055,7 +1087,9 @@ fn terminal_config() -> Config {
         },
         // Programs may copy to the clipboard (vim, tmux), never read it.
         osc52: Osc52::OnlyCopy,
-        kitty_keyboard: false,
+        // Programs that ask may have keys told apart (`encode_key`):
+        // Shift+Enter is how Claude Code takes a new line.
+        kitty_keyboard: true,
         ..Config::default()
     }
 }
@@ -1205,6 +1239,8 @@ enum TerminalUiEventKind {
     Notice(ProgramNotice),
     /// The folder the shell reported, by OSC 7 or 1337.
     Directory(ReportedDirectory),
+    /// The folder a local shell is in, as this computer tells.
+    WorkingDirectory(PathBuf),
     Bell,
     /// A finished line that a 关键字高亮 rule tells of.
     Keyword(KeywordHit),
@@ -1568,6 +1604,33 @@ mod tests {
         // Nothing asked, nothing written.
         proxy.answer(&term);
         assert!(commands.try_recv().is_err());
+    }
+
+    /// A program asks whether keys can be told apart (Claude Code does, to
+    /// take Shift+Enter), turns that on for as long as it runs and off
+    /// again.
+    #[test]
+    fn programs_may_turn_on_the_kitty_keyboard_protocol() {
+        let size = TerminalSize::new(20, 4, 8, 16);
+        let (proxy, commands, _) = test_proxy(size);
+        let mut term = AlacrittyTerm::new(terminal_config(), &size, proxy.clone());
+        let answer = |term: &AlacrittyTerm| {
+            proxy.answer(term);
+            commands
+                .try_iter()
+                .map(|command| match command {
+                    TerminalTransportCommand::Write(bytes) => String::from_utf8(bytes).unwrap(),
+                    _ => panic!("only writes"),
+                })
+                .collect::<Vec<_>>()
+        };
+        feed(&mut term, b"\x1b[?u");
+        assert_eq!(answer(&term), ["\x1b[?0u"]);
+        feed(&mut term, b"\x1b[>5u\x1b[?u");
+        assert_eq!(answer(&term), ["\x1b[?5u"]);
+        assert!(term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+        feed(&mut term, b"\x1b[<u");
+        assert!(!term.mode().intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
     }
 
     /// Each link on screen: the text of its cells and where it leads.
@@ -2169,6 +2232,17 @@ mod tests {
         assert!(screen_once_it_shows(&runtime, "before frame").contains("before frame"));
         // Held back meanwhile, as the update asked.
         assert!(started.elapsed() >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn what_a_terminal_kept_is_drawn_above_its_shell() {
+        let runtime = run_script(vec![
+            TerminalTransportEvent::Replay(b"$ ls\r\nsrc\r\n".to_vec()),
+            TerminalTransportEvent::Started,
+            TerminalTransportEvent::Output(b"$ ".to_vec()),
+        ]);
+        let screen = screen_once_it_shows(&runtime, "src\n$");
+        assert!(screen.starts_with("$ ls\nsrc\n$"), "{screen}");
     }
 
     #[test]

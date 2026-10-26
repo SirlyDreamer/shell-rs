@@ -4,6 +4,8 @@
 
 mod analytics;
 mod cli_changes;
+mod compose;
+mod compose_pane;
 mod credentials;
 mod dock_skin;
 mod editors;
@@ -13,10 +15,12 @@ mod front;
 mod imports;
 mod links;
 mod notices;
+mod projects;
 mod recent_hosts;
 mod sidebar;
 mod snippets;
 mod status_bar;
+mod sync;
 mod tab_bar;
 mod tabs;
 mod terminal_groups;

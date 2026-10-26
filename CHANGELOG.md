@@ -4,6 +4,138 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Keep English and Chinese entries together. The release workflow uses the matching English section for this repository’s GitHub Release.
 
+## [0.1.15]
+
+### Added
+
+- Compose pane: write and edit commands below the terminal, several lines if you like, before sending them. Open it manually with ⌘⇧E (Ctrl+Shift+E on Windows and Linux) or from the terminal’s context menu. Broadcast keeps direct key synchronization between selected visible terminals; it does not open the pane, and closing the pane does not stop broadcast.
+- Encrypted cross-device configuration sync through a folder, WebDAV or S3, configured explicitly in Settings.
+- Middle-click a tab to close it, as × does.
+
+### Improved
+
+- On Windows the interface font size defaults to 14, the same size as the system’s own text.
+- Terminal box drawing and input-method fixes work with the existing row cache, adaptive refresh and Windows partial redraw for smooth remote-desktop use.
+- Importing hosts no longer lists hosts whose username is git, or the addresses of GitHub, GitLab and other code hosting services, which are for pushing and pulling code, not for logging in.
+- With only one tab left, it still looks like a selected tab, as it does among others.
+
+### Fixed
+
+- On Windows, the dialog of “Upload…” showed only folders, so no file could be chosen.
+- In the Linux AppImage, commands such as cargo and rustc failed with “unknown proxy name” in a local terminal running zsh.
+- When the computer was busy, files dropped on a remote terminal were sometimes asked for in a dialog instead of going up at once.
+- In a terminal, typing with an input method after moving the cursor back into text already typed put the composition on top of the text after it, so neither could be read.
+- The borders around the buttons at either end of the tab bar didn’t line up with the tab bar’s bottom line.
+- The bottoms of letters such as g and p were cut off in tab names.
+
+## [0.1.15-beta.2]
+
+### Improved
+
+- With only one tab left, it still looks like a selected tab, as it does among others.
+
+### Fixed
+
+- In a terminal, typing with an input method after moving the cursor back into text already typed put the composition on top of the text after it, so neither could be read.
+
+## [0.1.15-beta.1]
+
+### Added
+
+- Compose pane: write and edit commands below the terminal, several lines if you like, before sending them. Open it with ⌘⇧E (Ctrl+Shift+E on Windows and Linux) or from the terminal’s context menu. Command broadcast’s command bar is now the compose pane.
+
+### Improved
+
+- On Windows the interface font size defaults to 14, the same size as the system’s own text.
+- Importing hosts no longer lists hosts whose username is git, or the addresses of GitHub, GitLab and other code hosting services, which are for pushing and pulling code, not for logging in.
+
+### Fixed
+
+- On Windows, the dialog of “Upload…” showed only folders, so no file could be chosen.
+- The borders around the buttons at either end of the tab bar didn’t line up with the tab bar’s bottom line.
+- The bottoms of letters such as g and p were cut off in tab names.
+
+## [0.1.14]
+
+### Added
+
+- Projects in the right sidebar beside local terminals: keep local terminals in groups like hosts, and after reopening ShellRS carry on in the folders they were in.
+- Terminals in Projects keep their last 1,000 lines of output when closed or when ShellRS quits, and show them when opened again; you can turn this off in Settings.
+- Shift+Enter takes a new line in programs that support it, such as Claude Code, in local and remote terminals.
+- Maximize window ⌃⌘↑ and Restore window ⌃⌘↓ shortcuts (macOS).
+- A system-wide Show or hide ShellRS shortcut that works from any app; it has no keys until you set them in Settings › Keyboard shortcuts.
+
+### Improved
+
+- The right sidebar remembers for each host whether it’s open and which tool it shows: open Files on a host, and it opens by itself whenever you connect to that host.
+- In a terminal on Windows and Linux, Ctrl with a letter (such as tmux’s Ctrl+B) goes to the shell instead of triggering a ShellRS shortcut.
+- The mouse pointer is an I-beam over a terminal’s text.
+- A local terminal tab with a long title shows just the folder’s name.
+- A long tab name ends in “…” instead of making the tab very wide.
+- When importing hosts, hovering over a name, address or other value cut short shows all of it.
+
+### Fixed
+
+- Box drawing such as the lines between tmux panes came apart into dashes in terminals.
+- On small screens, such as a laptop at 150% scaling, the window ran off the screen the first time it opened.
+- On Linux, GNOME and other desktops showed a generic app icon in the dock instead of ShellRS’s.
+- When importing hosts, a long authentication name covered the Status column.
+
+## [0.1.14-beta.4]
+
+### Added
+
+- Projects in the right sidebar beside local terminals: keep local terminals in groups like hosts, and after reopening ShellRS carry on in the folders they were in.
+- Terminals in Projects keep their last 1,000 lines of output when closed or when ShellRS quits, and show them when opened again; you can turn this off in Settings.
+
+## [0.1.14-beta.3]
+
+### Improved
+
+- The right sidebar remembers for each host whether it’s open and which tool it shows: open Files on a host, and it opens by itself whenever you connect to that host.
+- The mouse pointer is an I-beam over a terminal’s text.
+
+## [0.1.14-beta.2]
+
+### Added
+
+- Maximize window ⌃⌘↑ and Restore window ⌃⌘↓ shortcuts (macOS).
+- A system-wide Show or hide ShellRS shortcut that works from any app; it has no keys until you set them in Settings › Keyboard shortcuts.
+
+### Improved
+
+- In a terminal on Windows and Linux, Ctrl with a letter (such as tmux’s Ctrl+B) goes to the shell instead of triggering a ShellRS shortcut.
+
+## [0.1.14-beta.1]
+
+### Added
+
+- Shift+Enter takes a new line in programs that support it, such as Claude Code, in local and remote terminals.
+
+### Improved
+
+- A local terminal tab with a long title shows just the folder’s name.
+- A long tab name ends in “…” instead of making the tab very wide.
+
+## [0.1.13]
+
+### Added
+
+- Import hosts from ~/.ssh/config and ~/.ssh/known_hosts: open it from the host list’s “…” menu or the context menu of its empty space, preview the hosts, tick the ones to import, and change each one’s name, group, username and authentication.
+- Broadcast input: click the megaphone at the left of the tab bar and check a few terminals; they’re shown side by side, and the command bar above them sends a command to all of them. Turn on Sync keys to have typing in one go to the others too.
+- Windows portable version: unzip and run, with all its data in the data folder next to the program; it updates itself too.
+
+### Improved
+
+- After a remote terminal disconnects, Space closes the tab; Enter still reconnects.
+- Less processor use in virtual machines without a graphics card (where the processor draws the interface): fewer frames while a terminal scrolls, a cursor that doesn’t blink, and no animations.
+- In the Chinese interface, What’s new opens the changelog in Chinese.
+
+### Fixed
+
+- Terminal text looked blurry at display scaling such as 150%.
+- A terminal shown in a split popped up a reminder when its bell rang.
+
 ## [0.1.13-beta.3]
 
 ### Added

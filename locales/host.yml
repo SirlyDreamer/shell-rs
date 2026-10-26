@@ -662,6 +662,9 @@ host.store.not_saved.recent:
 host.store.not_saved.host_os:
   zh-CN: 记录主机系统未能保存到本地数据库：%{error}
   en: "Couldn’t save the host’s operating system to the local database: %{error}"
+host.store.not_saved.sidebar_tool:
+  zh-CN: 记录主机的右侧栏未能保存到本地数据库：%{error}
+  en: "Couldn’t save the host’s right sidebar to the local database: %{error}"
 host.store.not_saved.new_snippet:
   zh-CN: 新建命令片段未能保存到本地数据库：%{error}
   en: "Couldn’t save the new snippet to the local database: %{error}"
@@ -683,6 +686,35 @@ host.store.not_saved.delete_snippet_category:
 host.store.not_saved.batch:
   zh-CN: 这批改动未能保存到本地数据库：%{error}
   en: "Couldn’t save these changes to the local database: %{error}"
+host.store.not_saved.new_terminal_group:
+  zh-CN: 新建分组未能保存到本地数据库：%{error}
+  en: "Couldn’t save the new group to the local database: %{error}"
+host.store.not_saved.save_terminal_group:
+  zh-CN: 重命名分组未能保存到本地数据库：%{error}
+  en: "Couldn’t save the group’s new name to the local database: %{error}"
+host.store.not_saved.delete_terminal_group:
+  zh-CN: 删除分组未能保存到本地数据库：%{error}
+  en: "Couldn’t delete the group from the local database: %{error}"
+host.store.not_saved.new_saved_terminal:
+  zh-CN: 新建的本地终端未能保存到本地数据库：%{error}
+  en: "Couldn’t save the new local terminal to the local database: %{error}"
+host.store.not_saved.save_saved_terminal:
+  zh-CN: 本地终端的名称或所在文件夹未能保存到本地数据库：%{error}
+  en: "Couldn’t save the local terminal’s name or folder to the local database: %{error}"
+host.store.not_saved.delete_saved_terminal:
+  zh-CN: 删除本地终端未能保存到本地数据库：%{error}
+  en: "Couldn’t delete the local terminal from the local database: %{error}"
+host.store.not_saved.move_terminal_node:
+  zh-CN: 项目的新顺序未能保存到本地数据库：%{error}
+  en: "Couldn’t save the new order of Projects to the local database: %{error}"
+host.store.not_saved.saved_terminal_tabs:
+  zh-CN: 打开的本地终端未能保存到本地数据库，下次启动不会恢复：%{error}
+  en: "Couldn’t save the open local terminals to the local database, so the next launch won’t reopen them: %{error}"
+
+# A new terminal of 项目 kept at the top, numbered: 「终端 1」.
+host.saved_terminal.name:
+  zh-CN: 终端
+  en: Terminal
 
 host.store.copy_name:
   zh-CN: "%{name} 副本"
@@ -690,9 +722,22 @@ host.store.copy_name:
 host.store.no_key_dir:
   zh-CN: 没有可以保存私钥的目录
   en: There’s no folder to keep private keys in
+host.store.key_unreadable:
+  zh-CN: 读不出这个私钥文件，或它太大，不像私钥
+  en: Couldn’t read the key file, or it’s too large to be a key
 host.store.key_not_deleted:
   zh-CN: ShellRS 保存的私钥未能删除：%{error}
   en: "Couldn’t delete a private key ShellRS keeps: %{error}"
+
+host.store.sync.not_saved:
+  zh-CN: 同步来的改动未能保存，这一轮没有应用：%{error}
+  en: "Couldn’t save what sync brought, so none of it was applied: %{error}"
+host.store.sync.secret_not_saved:
+  zh-CN: 同步来的密码或私钥未能保存到这台设备：%{error}
+  en: "Couldn’t keep a synced password or key on this device: %{error}"
+host.store.sync.state_not_saved:
+  zh-CN: 同步状态未能保存：%{error}
+  en: "Couldn’t save the sync state: %{error}"
 
 host.store.secret.password_write:
   zh-CN: 密码未能写入系统钥匙串：%{error}
@@ -722,7 +767,14 @@ host.store.secret.temporary:
   zh-CN: 这次连接的密码未能记下：%{error}
   en: "Couldn’t keep the password for this connection: %{error}"
 
+host.store.secret.sync_keyring:
+  zh-CN: 同步的密钥未能在钥匙串里更新：%{error}
+  en: "Couldn’t update the sync keys in the keychain: %{error}"
+
 # 导入主机: the dialog that adds the hosts ~/.ssh/config or known_hosts names.
+host.import.key_not_copied:
+  zh-CN: 私钥未能复制到 ShellRS 保存私钥的目录，凭据仍用原文件：%{error}
+  en: "Couldn’t copy a key to the folder ShellRS keeps keys in, so its credential uses the file where it is: %{error}"
 host.import.title.ssh_config:
   zh-CN: 从 ~/.ssh/config 导入
   en: Import from ~/.ssh/config

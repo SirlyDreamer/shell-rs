@@ -1,13 +1,16 @@
 //! 终端: shared terminal emulation, transports and Dock panels.
 
+mod box_drawing;
 mod broadcast;
 mod directory;
 mod directory_setup;
 mod engine;
+mod environment;
 mod exec;
 mod font;
 mod highlight;
 mod input;
+mod kept_output;
 mod links;
 mod local_pty;
 mod local_shell;
@@ -34,6 +37,7 @@ pub use directory_setup::{
     parse_check as parse_directory_check,
 };
 pub use engine::{TerminalCell, TerminalEngine, TerminalEvent, TerminalSnapshot};
+pub(crate) use environment::strip_launcher_vars;
 pub use exec::{ExecTarget, exec_answer};
 pub use font::{
     DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, FONT_SIZE_RANGE, LINE_HEIGHT_RANGE, TerminalFont,
@@ -43,9 +47,10 @@ pub use highlight::{
     HighlightColor, HighlightRule, HighlightSet, PatternError, TerminalHighlights, default_rules,
 };
 pub use input::{TerminalInput, TerminalInputEvent};
+pub use kept_output::KEPT_LINES;
 pub use local_pty::LocalPtyTransportProvider;
-pub use local_shell::{LocalShell, default_shell_name, installed_shells, quote_word};
-pub use local_terminal_panel::{LocalTerminalPanel, LocalTerminalPanelEvent};
+pub use local_shell::{LocalLaunch, LocalShell, default_shell_name, installed_shells, quote_word};
+pub use local_terminal_panel::{LocalTerminalPanel, LocalTerminalPanelEvent, SavedName};
 pub use model::{
     LocalTerminalId, RemoteTerminalId, RightClick, TerminalInteraction, TerminalLifecycle,
     TerminalSize, TerminalStatus,
@@ -59,7 +64,8 @@ pub use search::{SearchDirection, SearchMark, SearchPosition};
 pub use terminal_panel::{TerminalPanel, TerminalPanelEvent};
 pub(crate) use terminal_view::terminal_key_bindings;
 pub use terminal_view::{
-    TERMINAL_FIND_KEY_CONTEXT, TERMINAL_KEY_CONTEXT, TerminalMenuItems, TerminalView,
+    ComposePaneShown, TERMINAL_FIND_KEY_CONTEXT, TERMINAL_KEY_CONTEXT, TerminalMenuItems,
+    TerminalView,
 };
 pub use theme::{TerminalColors, TerminalTheme};
 pub(crate) use transport::send_event;

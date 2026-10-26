@@ -187,6 +187,25 @@ impl CenterTabBar {
                             .overflow_x_scroll()
                             .lock_scroll_axis()
                             .track_scroll(&self.scroll)
+                            .test_support()
+                            .on_scroll_wheel(|event, window, cx| {
+                                // Mouse wheels report vertical lines. Route those
+                                // through the tab strip's normal horizontal scroll.
+                                let ScrollDelta::Lines(lines) = event.delta else {
+                                    return;
+                                };
+                                if lines.x != 0. || lines.y == 0. {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                let sideways = ScrollWheelEvent {
+                                    delta: ScrollDelta::Lines(point(lines.y, 0.)),
+                                    ..event.clone()
+                                };
+                                window.defer(cx, move |window, cx| {
+                                    window.dispatch_event(sideways.to_platform_input(), cx);
+                                });
+                            })
                             .children(tabs)
                             .child(trailing),
                     ),

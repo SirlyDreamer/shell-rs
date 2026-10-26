@@ -6,6 +6,28 @@ use gpui_kit::component::{
     Placement,
     dock::{DockPlacement, InsertTarget, PanelId},
 };
+use shellrs::app::Shortcut;
+
+/// Bind the close-tab shortcut to a key the terminal does not claim.
+///
+/// Ctrl with a letter is the shell's in a terminal (see
+/// `shell_keys_in_terminal`), and the default key for closing a tab is
+/// Ctrl+W on every platform but macOS, so the shortcut would go to the
+/// shell there. Ctrl and Shift with a letter is the app's everywhere.
+fn bind_close_tab(workspace: &Entity<Workspace>, cx: &mut TestAppContext) {
+    let shortcut = Shortcut::find("close-tab").expect("the close-tab shortcut");
+    cx.update(|cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.settings().update(cx, |settings, cx| {
+                settings.update(
+                    |settings| settings.shortcuts.set(shortcut, "ctrl-shift-w".into()),
+                    cx,
+                )
+            })
+        })
+    });
+    cx.run_until_parked();
+}
 
 #[gpui_kit::test]
 fn tab_close_button_closes_the_terminal_and_disconnects(cx: &mut TestAppContext) {
@@ -324,7 +346,8 @@ async fn recent_host_menu_commands_work_from_the_start_page(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn close_shortcut_closes_the_displayed_tab_down_to_none(cx: &mut TestAppContext) {
-    let (handle, _) = open_workspace(cx);
+    let (handle, workspace) = open_workspace(cx);
+    bind_close_tab(&workspace, cx);
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
@@ -339,7 +362,7 @@ fn close_shortcut_closes_the_displayed_tab_down_to_none(cx: &mut TestAppContext)
         window.render_frame(cx);
         // The new tab is displayed, with its input focused.
         assert!(window.find(("terminal", FIRST_NEW_TERMINAL)).visible());
-        window.press("secondary-w", cx);
+        window.press("ctrl-shift-w", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -349,14 +372,14 @@ fn close_shortcut_closes_the_displayed_tab_down_to_none(cx: &mut TestAppContext)
         assert!(window.try_find(("terminal", FIRST_NEW_TERMINAL)).is_none());
         assert!(window.try_find("recent-hosts").is_none());
         // Keep closing whichever tab the dock displays next.
-        window.press("secondary-w", cx);
+        window.press("ctrl-shift-w", cx);
     })
     .unwrap();
     cx.run_until_parked();
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        window.press("secondary-w", cx);
+        window.press("ctrl-shift-w", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -375,7 +398,7 @@ fn close_shortcut_closes_the_displayed_tab_down_to_none(cx: &mut TestAppContext)
         );
         assert!(window.find("recent-hosts").visible());
         // With nothing open the shortcut does nothing.
-        window.press("secondary-w", cx);
+        window.press("ctrl-shift-w", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -480,6 +503,92 @@ async fn double_clicking_a_tab_toggles_the_host_sidebar(cx: &mut TestAppContext)
     .unwrap();
     cx.run_until_parked();
     assert!(sidebar_shown(cx));
+}
+
+/// A middle click on a tab's title closes the tab, as its × does; the
+/// other tabs stay.
+#[gpui_kit::test]
+async fn middle_clicking_a_tab_closes_it(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let title = window
+            .find(("terminal-tab", INITIAL_WEB_TERMINAL))
+            .bounds()
+            .center();
+        button_click_at(
+            window,
+            title,
+            MouseButton::Middle,
+            gpui_kit::Modifiers::default(),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))
+                .is_none()
+        );
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_STAGING_TERMINAL))
+                .is_some()
+        );
+    });
+}
+
+/// A mouse wheel brings back tabs scrolled out of view, though the tab bar
+/// scrolls only sideways and a wheel turns only vertically (#66).
+#[gpui_kit::test]
+fn the_mouse_wheel_scrolls_the_tabs(cx: &mut TestAppContext) {
+    let (handle, _) = open_workspace(cx);
+    for _ in 0..30 {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.dispatch_action(Box::new(ConnectHost(HostId(WEB_01))), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+    // The bar and where the first tab starts.
+    let layout = |cx: &mut TestAppContext| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let bar = window.find("tabs-scroll").bounds();
+            let tab = window.find(("terminal-tab", INITIAL_WEB_TERMINAL)).bounds();
+            (bar, tab.left())
+        })
+        .unwrap()
+    };
+
+    // The last tab opened is shown, the first scrolled out to the left.
+    let (bar, before) = layout(cx);
+    assert!(before < bar.left());
+
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position: bar.center(),
+                delta: gpui_kit::ScrollDelta::Lines(point(0., 3.)),
+                modifiers: gpui_kit::Modifiers::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let (_, after) = layout(cx);
+    assert!(
+        after > before,
+        "the tabs did not scroll: {before:?} → {after:?}"
+    );
 }
 
 #[gpui_kit::test]
@@ -913,9 +1022,11 @@ fn a_tool_follows_the_terminal_in_front_and_leaves_it_the_keyboard(cx: &mut Test
         );
     });
 
+    // staging-api's terminal: its own sidebar, opened there.
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx)
     });
+    in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
     let sidebar = ("tool-sidebar", INITIAL_STAGING_TERMINAL);
     in_frame(cx, handle, |window, _| {
         assert!(window.try_find(sidebar).is_some());
@@ -943,7 +1054,7 @@ fn a_tool_follows_the_terminal_in_front_and_leaves_it_the_keyboard(cx: &mut Test
 }
 
 #[gpui_kit::test]
-async fn the_tool_sidebar_goes_with_ssh_terminals_only(cx: &mut TestAppContext) {
+async fn the_tool_sidebar_goes_with_terminals_only(cx: &mut TestAppContext) {
     let (handle, _) = open_workspace_with_sftp(cx, Arc::new(FakeSftpProvider::default()));
     cx.run_until_parked();
     in_frame(cx, handle, |window, cx| {
@@ -965,28 +1076,162 @@ async fn the_tool_sidebar_goes_with_ssh_terminals_only(cx: &mut TestAppContext) 
     open_test_explorer(cx, handle).await;
     assert_eq!(shown(cx), (false, false));
 
-    // Nor the settings, nor a local terminal, which the shortcut leaves
-    // alone too.
+    // Nor the settings.
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(OpenSettings), cx)
     });
     assert_eq!(shown(cx), (false, false));
+    // A local terminal has the switch with 项目 alone, closed until opened;
+    // the shortcut opens it.
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(NewLocalTerminal), cx)
+    });
+    assert_eq!(shown(cx), (true, false));
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("tool-projects").is_some());
+        assert!(window.try_find("tool-snippets").is_none());
+        assert!(window.try_find(("tool-sidebar-local", 1_u64)).is_none());
     });
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(ToggleToolSidebar), cx)
     });
-    assert_eq!(shown(cx), (false, false));
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(
+            window.find(("tool-sidebar-local", 1_u64)).label(),
+            Some("项目")
+        );
+        assert_eq!(window.find("tool-projects").checked(), Some(true));
+    });
 
-    // The next SSH terminal brings it back as it was, working on that one.
+    // Its host's terminal brings it back as it was.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
+    });
+    in_frame(cx, handle, |window, _| {
+        let sidebar = window.find(("tool-sidebar", INITIAL_WEB_TERMINAL));
+        assert_eq!(sidebar.label(), Some("命令片段"));
+        assert_eq!(window.find("tool-snippets").checked(), Some(true));
+    });
+}
+
+/// Each host keeps the sidebar as its terminals left it: web-01's tool comes
+/// back with web-01's terminal, staging-api's is its own, and the hosts keep
+/// them for the next launch.
+#[gpui_kit::test]
+fn each_host_keeps_its_own_tool_sidebar(cx: &mut TestAppContext) {
+    use shellrs::app::ToolKind;
+
+    let (handle, workspace) = open_workspace(cx);
+    let front = |terminal: u64, cx: &mut TestAppContext| {
+        in_frame(cx, handle, |window, cx| {
+            window.click(("terminal-tab", terminal), cx)
+        })
+    };
+    let click = |button: &'static str, cx: &mut TestAppContext| {
+        in_frame(cx, handle, |window, cx| window.click(button, cx))
+    };
+    let showing = |terminal: u64, cx: &mut TestAppContext| {
+        in_frame(cx, handle, |window, _| {
+            window
+                .try_find(("tool-sidebar", terminal))
+                .and_then(|sidebar| sidebar.label().map(str::to_string))
+        })
+    };
+
+    front(INITIAL_WEB_TERMINAL, cx);
+    click("tool-docker", cx);
+    assert_eq!(showing(INITIAL_WEB_TERMINAL, cx).as_deref(), Some("Docker"));
+    // staging-api never had it open.
+    front(INITIAL_STAGING_TERMINAL, cx);
+    assert_eq!(showing(INITIAL_STAGING_TERMINAL, cx), None);
+    click("tool-snippets", cx);
+
+    for (terminal, tool) in [
+        (INITIAL_WEB_TERMINAL, "Docker"),
+        (INITIAL_STAGING_TERMINAL, "命令片段"),
+    ] {
+        front(terminal, cx);
+        assert_eq!(showing(terminal, cx).as_deref(), Some(tool));
+    }
+
+    // Hidden on web-01, it is hidden there only.
+    front(INITIAL_WEB_TERMINAL, cx);
+    click("tool-docker", cx);
+    front(INITIAL_STAGING_TERMINAL, cx);
+    assert_eq!(
+        showing(INITIAL_STAGING_TERMINAL, cx).as_deref(),
+        Some("命令片段")
+    );
+    front(INITIAL_WEB_TERMINAL, cx);
+    assert_eq!(showing(INITIAL_WEB_TERMINAL, cx), None);
+
+    let kept = cx.update(|cx| {
+        let store = workspace.read(cx).store().read(cx);
+        [WEB_01, STAGING_API].map(|id| store.host(HostId(id)).and_then(|host| host.sidebar_tool))
+    });
+    assert_eq!(kept, [None, Some(ToolKind::Snippets)]);
+}
+
+/// The tool a host kept from the last launch: its terminal opens with it,
+/// no click needed, and other hosts' do not.
+#[gpui_kit::test]
+fn a_host_brings_back_the_tool_it_kept_from_the_last_launch(cx: &mut TestAppContext) {
+    use shellrs::app::ToolKind;
+
+    let mut store = HostStore::seed();
+    store.set_host_sidebar_tool_unnotified(HostId(WEB_01), Some(ToolKind::Snippets));
+    let (handle, _) = open_workspace_with_store(cx, store);
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
+    });
+    in_frame(cx, handle, |window, _| {
+        let sidebar = window.find(("tool-sidebar", INITIAL_WEB_TERMINAL));
+        assert_eq!(sidebar.label(), Some("命令片段"));
+        assert_eq!(window.find("tool-snippets").checked(), Some(true));
+    });
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx)
     });
     in_frame(cx, handle, |window, _| {
-        let sidebar = window.find(("tool-sidebar", INITIAL_STAGING_TERMINAL));
-        assert_eq!(sidebar.label(), Some("命令片段"));
-        assert_eq!(window.find("tool-snippets").checked(), Some(true));
+        assert!(
+            window
+                .try_find(("tool-sidebar", INITIAL_STAGING_TERMINAL))
+                .is_none()
+        );
+    });
+}
+
+/// A host deleted while its terminal is open leaves the terminal, and the
+/// switch still opens and hides the sidebar there.
+#[gpui_kit::test]
+fn the_tool_switch_works_on_a_deleted_hosts_terminal(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
+    });
+    cx.update(|cx| {
+        let store = workspace.read(cx).store().clone();
+        store.update(cx, |store, cx| store.remove(HostId(WEB_01), cx));
+    });
+    cx.run_until_parked();
+    let sidebar = ("tool-sidebar", INITIAL_WEB_TERMINAL);
+
+    in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(window.find(sidebar).label(), Some("命令片段"));
+    });
+    // Kept while the terminal is open.
+    for terminal in [INITIAL_STAGING_TERMINAL, INITIAL_WEB_TERMINAL] {
+        in_frame(cx, handle, |window, cx| {
+            window.click(("terminal-tab", terminal), cx)
+        });
+    }
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(window.find(sidebar).label(), Some("命令片段"));
+    });
+    in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find(sidebar).is_none());
     });
 }
 
@@ -996,11 +1241,14 @@ async fn the_tool_sidebar_goes_with_ssh_terminals_only(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn with_the_center_split_the_tool_sidebar_follows_the_focus(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
-    in_frame(cx, handle, |window, cx| {
-        window.activate_window();
-        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
-    });
-    in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
+    in_frame(cx, handle, |window, _| window.activate_window());
+    // Open on both hosts' terminals, web-01's in front.
+    for terminal in [INITIAL_STAGING_TERMINAL, INITIAL_WEB_TERMINAL] {
+        in_frame(cx, handle, |window, cx| {
+            window.click(("terminal-tab", terminal), cx)
+        });
+        in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
+    }
     in_frame(cx, handle, |window, _| {
         assert_eq!(window.find("tool-sidebar-host").label(), Some("web-01"));
     });
@@ -1072,10 +1320,14 @@ fn with_the_center_split_the_tool_sidebar_follows_the_focus(cx: &mut TestAppCont
 async fn a_tab_dropped_over_the_terminal_takes_the_sidebar_with_it(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace_with_sftp(cx, Arc::new(FakeSftpProvider::default()));
     cx.run_until_parked();
-    in_frame(cx, handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
-    });
-    in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
+    // Open on both hosts' terminals: either may be the one beside the SFTP
+    // tab.
+    for terminal in [INITIAL_STAGING_TERMINAL, INITIAL_WEB_TERMINAL] {
+        in_frame(cx, handle, |window, cx| {
+            window.click(("terminal-tab", terminal), cx)
+        });
+        in_frame(cx, handle, |window, cx| window.click("tool-snippets", cx));
+    }
     open_test_explorer(cx, handle).await;
 
     let explorer = cx.update(|cx| {

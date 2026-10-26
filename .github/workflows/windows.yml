@@ -1,7 +1,8 @@
 # The Windows build, which the Macs this is developed on cannot compile:
-# the whole crate through clippy, the external CLI's tests, including the
-# named pipe between two processes, the updater's, and the local SFTP pane's
-# paths (std canonicalizes to `\\?\C:\…` there).
+# the whole workspace through clippy, the external CLI's tests, including
+# the named pipe between two processes, the updater's, the local SFTP pane's
+# paths (std canonicalizes to `\\?\C:\…` there), and the sync crate's, whose
+# folder store replaces files the Windows way.
 #
 # A push runs it only when it touches code that differs on Windows (the
 # files with `cfg(windows)` and friends), the build script or the
@@ -19,11 +20,13 @@ on:
       - "src/update/**"
       - "src/app/mod.rs"
       - "src/app/paths.rs"
+      - "src/app/computer.rs"
       - "src/host/private_key.rs"
       - "src/host/import/**"
       - "tests/ui/host_import.rs"
       - "tests/ui/zmodem.rs"
       - "src/app/window_hiding.rs"
+      - "src/app/system_hotkey.rs"
       - "src/main.rs"
       - "src/bin/**"
       - "src/ssh/connection.rs"
@@ -35,15 +38,28 @@ on:
       - "src/sftp/upload.rs"
       - "src/sftp/sync.rs"
       - "src/credential/credential_dialog.rs"
+      - "src/settings/model.rs"
       - "src/settings/settings_panel.rs"
       - "src/terminal/**"
       - "src/workspace/front.rs"
       - "src/workspace/tools.rs"
+      - "src/workspace/compose*.rs"
+      - "src/workspace/terminal_groups.rs"
+      - "src/workspace/tab_bar.rs"
+      - "src/workspace/dock_skin.rs"
+      - "src/workspace/sync.rs"
+      - "src/sync/**"
+      - "tests/ui/compose.rs"
+      - "tests/ui/projects.rs"
+      - "tests/ui/sync.rs"
+      - "tests/ui/workspace.rs"
       - "tests/ui/terminal.rs"
       - "tests/ui/terminal_groups.rs"
       - "vendor/gpui-pre-windows/**"
       - ".github/workflows/windows.yml"
+      - "src/project/project_panel.rs"
       - "src/serial/**"
+      - "crates/shellrs-sync/**"
       - "src/app/shortcuts.rs"
       - "src/workspace/window_state.rs"
       - "src/testing.rs"
@@ -75,6 +91,10 @@ jobs:
       - run: "cargo test --locked --lib terminal::"
       - run: "cargo test --locked --test ui terminal::"
       - run: "cargo test --locked --test ui terminal_groups::"
+      - run: "cargo test --locked --test ui compose::"
+      - run: "cargo test --locked --test ui projects::"
+      - run: "cargo test --locked --test ui sync::"
+      - run: "cargo test --locked --test ui workspace::"
       - run: "cargo test --locked --lib ssh::"
       - run: "cargo test --locked --test ui connection::"
       - run: "cargo test --lib cli::"
@@ -87,4 +107,6 @@ jobs:
       - run: "cargo test --lib sftp::tests::local_listing"
       - run: "cargo test --lib terminal::local_shell"
       - run: "cargo test --lib serial::"
+      - run: "cargo test --lib settings::model"
       - run: cargo test --test cli_bin
+      - run: cargo test --locked -p shellrs-sync

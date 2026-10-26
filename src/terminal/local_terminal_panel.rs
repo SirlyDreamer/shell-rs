@@ -32,11 +32,26 @@ pub enum LocalTerminalPanelEvent {
     /// `rz` or `sz` started (a shell of this computer can ssh on): the
     /// user chooses, and the answer goes to [`LocalTerminalPanel::zmodem_reply`].
     ZmodemAsk(LocalTerminalId, ZmodemDirection),
+    /// The shell is in another folder now.
+    WorkingDirectory(LocalTerminalId, std::path::PathBuf),
+}
+
+/// What 项目 calls one of its terminals. Its tab shows the name until the
+/// shell or a program titles it, as a terminal app's tab does, or the
+/// `title` it had last time until then; a name `fixed` by hand shows over
+/// any title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedName {
+    pub name: SharedString,
+    pub fixed: bool,
+    pub title: Option<SharedString>,
 }
 
 /// A local login-shell Dock tab backed by the shared terminal view.
 pub struct LocalTerminalPanel {
     id: LocalTerminalId,
+    /// Its name in 项目, for a terminal kept there.
+    name: Option<SavedName>,
     terminal: Entity<TerminalView>,
     presentation: super::terminal_view::PanelPresentation,
     tab_group: Option<WeakEntity<TabGroup>>,
@@ -48,13 +63,15 @@ impl LocalTerminalPanel {
     pub fn new(
         id: LocalTerminalId,
         factory: SharedTerminalTransportFactory,
+        name: Option<SavedName>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let fixed = name.as_ref().map(|name| name.name.clone());
         let terminal = cx.new(|cx| {
             TerminalView::new(
                 ("local-terminal", id.0),
-                move |_| default_title(id),
+                move |_| fixed.clone().unwrap_or_else(|| default_title(id)),
                 factory,
                 window,
                 cx,
@@ -83,6 +100,12 @@ impl LocalTerminalPanel {
                     TerminalEvent::ZmodemAsk(direction) => {
                         cx.emit(LocalTerminalPanelEvent::ZmodemAsk(id, *direction));
                     }
+                    TerminalEvent::WorkingDirectory(folder) => {
+                        cx.emit(LocalTerminalPanelEvent::WorkingDirectory(
+                            id,
+                            folder.clone(),
+                        ));
+                    }
                     _ => {}
                 },
             ),
@@ -90,6 +113,7 @@ impl LocalTerminalPanel {
 
         Self {
             id,
+            name,
             terminal,
             presentation,
             tab_group: None,
@@ -98,10 +122,12 @@ impl LocalTerminalPanel {
         }
     }
 
-    /// 「本地终端 1」: what a notification calls it, whatever title the
-    /// shell gives the tab.
+    /// 「本地终端 1」, or its name in 项目: what a notification calls it,
+    /// whatever title the shell gives the tab.
     pub fn default_title(&self) -> SharedString {
-        default_title(self.id)
+        self.name
+            .as_ref()
+            .map_or_else(|| default_title(self.id), |name| name.name.clone())
     }
 
     pub fn tab_group(&self) -> Option<WeakEntity<TabGroup>> {
@@ -147,11 +173,32 @@ impl LocalTerminalPanel {
         window.focus(&focus, cx);
     }
 
-    pub(crate) fn display_title(&self, cx: &App) -> SharedString {
-        self.terminal.read(cx).title(cx).map_or_else(
-            || self.default_title(),
-            |title| short_title(&title).into_owned().into(),
+    /// Call it by its name in 项目, renamed there.
+    pub fn set_name(&mut self, name: SavedName, cx: &mut Context<Self>) {
+        if self.name.as_ref() != Some(&name) {
+            self.name = Some(name);
+            cx.notify();
+        }
+    }
+
+    /// The title its shell or a program gives it, short: `None` before one
+    /// does. 项目 shows it for a terminal's name, as the tab does.
+    pub fn shell_title(&self, cx: &App) -> Option<SharedString> {
+        let title = self.terminal.read(cx).title(cx)?;
+        Some(
+            short_title(&title, crate::app::computer_name().as_deref())
+                .into_owned()
+                .into(),
         )
+    }
+
+    pub(crate) fn display_title(&self, cx: &App) -> SharedString {
+        if let Some(name) = self.name.as_ref().filter(|name| name.fixed) {
+            return name.name.clone();
+        }
+        self.shell_title(cx)
+            .or_else(|| self.name.as_ref().and_then(|name| name.title.clone()))
+            .unwrap_or_else(|| self.default_title())
     }
 }
 
@@ -282,16 +329,46 @@ impl Render for LocalTerminalPanel {
     }
 }
 
-/// The shell's title without the folders of programs. The Windows console
-/// titles a window with the whole path of what runs in it
-/// (`C:\Windows\system32\cmd.exe - ping localhost`), which leaves a tab
-/// little else; each such path shows as the program's name, `cmd`.
-fn short_title(title: &str) -> Cow<'_, str> {
+/// A title up to this long shows whole, `xuz@mac:~/src` as it is: the
+/// folder alone, `src` or `~`, says too little.
+const WHOLE_TITLE_CHARS: usize = 30;
+
+/// The shell's title, short enough to tell tabs apart by.
+///
+/// - Shells title a window `user@host:~/src/app` (oh-my-zsh, bash on
+///   Debian and Fedora). On `this_host`, a title longer than
+///   [`WHOLE_TITLE_CHARS`] shows as the folder alone, `app`: the user and
+///   host are the same on every local tab. A host ssh'd to from here keeps
+///   the whole title.
+/// - The Windows console titles a window with the whole path of what runs
+///   in it (`C:\Windows\system32\cmd.exe - ping localhost`), which leaves a
+///   tab little else; each such path shows as the program's name, `cmd`.
+fn short_title<'a>(title: &'a str, this_host: Option<&str>) -> Cow<'a, str> {
+    static USER_HOST_FOLDER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[^@\s]+@([^:\s]+): ?([~/].*)$").expect("pattern"));
     static PROGRAM_PATH: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?i)\b[a-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*([^\\/:*?"<>|\r\n]+?)\.exe\b"#)
             .expect("pattern")
     });
+    if let Some(this_host) = this_host
+        && title.chars().count() > WHOLE_TITLE_CHARS
+        && let Some(parts) = USER_HOST_FOLDER.captures(title)
+        && is_this_host(&parts[1], this_host)
+    {
+        let path = parts.get(2).expect("group").as_str();
+        return match path.trim_end_matches('/') {
+            "" => Cow::Borrowed("/"),
+            path => Cow::Borrowed(path.rsplit('/').next().unwrap_or(path)),
+        };
+    }
     PROGRAM_PATH.replace_all(title, "$1")
+}
+
+/// Whether `host` in a title names this computer, `this_host`: whole, or
+/// up to its first dot as prompts write it.
+fn is_this_host(host: &str, this_host: &str) -> bool {
+    let short = this_host.split('.').next().unwrap_or(this_host);
+    host.eq_ignore_ascii_case(this_host) || host.eq_ignore_ascii_case(short)
 }
 
 /// 「本地终端 1」, in the interface language.
@@ -341,7 +418,45 @@ mod tests {
             (r"D:\work", r"D:\work"),
             ("vim notes.exe.txt", "vim notes.exe.txt"),
         ] {
-            assert_eq!(short_title(title), shown, "{title}");
+            assert_eq!(short_title(title, None), shown, "{title}");
         }
+    }
+
+    #[test]
+    fn this_computers_user_and_host_show_as_the_folder() {
+        let here = Some("XuzdeMacBook-Pro.local");
+        for (title, shown) in [
+            (
+                "xuz@XuzdeMacBook-Pro:~/Documents/Projects/GoProjects/go-dock",
+                "go-dock",
+            ),
+            ("xuz@xuzdemacbook-pro: ~/Documents/src/", "src"),
+            ("root@XuzdeMacBook-Pro.local:/var/log", "log"),
+            ("xuz@XuzdeMacBook-Pro:~/My Projects/app one", "app one"),
+            ("administrator@XuzdeMacBook-Pro.local:~", "~"),
+            ("administrator@XuzdeMacBook-Pro.local:/", "/"),
+            // A short title shows whole.
+            ("xuz@XuzdeMacBook-Pro:~", "xuz@XuzdeMacBook-Pro:~"),
+            ("xuz@XuzdeMacBook-Pro:~/src", "xuz@XuzdeMacBook-Pro:~/src"),
+            // Another host, ssh'd to from here, keeps its name.
+            (
+                "root@web-01.example.com:/var/log/nginx",
+                "root@web-01.example.com:/var/log/nginx",
+            ),
+            // Not a folder: what runs, or another kind of title.
+            (
+                "xuz@XuzdeMacBook-Pro: vim /etc/nginx/nginx.conf",
+                "xuz@XuzdeMacBook-Pro: vim /etc/nginx/nginx.conf",
+            ),
+            ("claude", "claude"),
+            ("ssh root@web-01", "ssh root@web-01"),
+        ] {
+            assert_eq!(short_title(title, here), shown, "{title}");
+        }
+        // With no name for this computer, nothing is taken for it.
+        assert_eq!(
+            short_title("xuz@XuzdeMacBook-Pro:~/Documents/src", None),
+            "xuz@XuzdeMacBook-Pro:~/Documents/src"
+        );
     }
 }

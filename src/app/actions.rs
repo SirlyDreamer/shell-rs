@@ -1,8 +1,11 @@
 //! Every user command, so toolbar buttons, menus and key bindings dispatch
 //! the same action and cannot disagree.
 
+use std::path::PathBuf;
+
 use gpui_kit::component::{Icon, IconName};
 use gpui_kit::*;
+use shellrs_sync::DeviceId;
 
 use super::{CatalogIcon, DOCKER_ICON};
 use crate::i18n::t;
@@ -12,7 +15,8 @@ use crate::{
     editor::EditorId,
     explorer::{ExplorerId, FileSizeFormat, PaneSide},
     host::{
-        CredentialId, ForwardId, GroupId, HostId, HostNode, NodeDrop, SnippetCategoryId, SnippetId,
+        CredentialId, ForwardId, GroupId, HostId, HostNode, NodeDrop, SavedTerminalId,
+        SnippetCategoryId, SnippetId, TerminalDrop, TerminalGroupId, TerminalNode,
     },
     kubernetes::KubernetesCommand,
     monitor::MonitorDetail,
@@ -41,6 +45,13 @@ gpui_kit::actions!(
         NewLocalTerminal,
         /// Replace terminal tab marks with broadcast membership checkboxes.
         ToggleTerminalBroadcast,
+        /// Show or hide 撰写窗格, the compose pane below the terminals.
+        ToggleComposePane,
+        /// Run what 撰写窗格 holds in the terminal in front, or in every
+        /// terminal of 命令广播.
+        SendCompose,
+        /// Send Ctrl+C where 撰写窗格 sends.
+        SendComposeInterrupt,
         /// Copy the active terminal selection.
         CopyTerminal,
         /// Paste the clipboard into the active terminal.
@@ -66,6 +77,15 @@ gpui_kit::actions!(
         ToggleHostPanel,
         /// Show or hide the right sidebar, whichever tool it is showing.
         ToggleToolSidebar,
+        /// Fill the screen with the window, as double-clicking its title
+        /// bar does.
+        MaximizeWindow,
+        /// Put a maximized window back to its size before.
+        RestoreWindow,
+        /// 显示或隐藏 ShellRS: bring it in front of other apps, or put it
+        /// away when it already is. The system tells of its key
+        /// (`system_hotkey`), not the keymap.
+        ShowOrHideApp,
         /// Read the network connections of the SSH terminal's host again.
         RefreshConnections,
         /// Read the processes of the SSH terminal's host again.
@@ -93,6 +113,8 @@ gpui_kit::actions!(
         NewSnippet,
         /// Open the new-category dialog of 命令片段.
         NewSnippetCategory,
+        /// Open the new-group dialog of 项目.
+        NewTerminalGroup,
         /// Show the host list in the left dock.
         ShowHosts,
         /// Show the port-forwarding list in the left dock.
@@ -187,6 +209,28 @@ gpui_kit::actions!(
         OpenChangelog,
         /// Open the ShellRS website.
         OpenWebsite,
+        /// 开启同步 › 选择文件夹…: pick the folder to sync through, then make
+        /// sync there or join it.
+        SetUpSync,
+        /// 开启同步 › 连接 WebDAV…: name the server and the login, then make
+        /// sync there or join it.
+        SetUpWebDavSync,
+        /// 开启同步 › 连接 S3…: name the bucket and its keys, then make sync
+        /// there or join it.
+        SetUpS3Sync,
+        /// Sign in anew to the WebDAV server or bucket sync goes through.
+        ChangeSyncLogin,
+        /// Run a round of sync now.
+        SyncNow,
+        /// Open what sync waits for the user to settle: a password, a
+        /// reset, deletions to agree to.
+        ReviewSync,
+        /// Open 更换同步密码.
+        ChangeSyncPassword,
+        /// Open 更换同步密码和密钥.
+        RotateSyncKey,
+        /// Open 关闭同步.
+        TurnOffSync,
     ]
 );
 
@@ -255,6 +299,13 @@ id_actions! {
     /// Open the dialog that gives one SFTP tab its own title.
     RenameExplorer(ExplorerId);
 
+    /// Make sync in this folder, or join the sync there: what the folder
+    /// picker of 开启同步… chose.
+    SetUpSyncIn(PathBuf);
+    /// Ask first, then take a device out of sync: its file in the folder
+    /// goes.
+    RemoveSyncDevice(DeviceId);
+
     /// Install (or update) the agent skill for one agent.
     InstallAgentSkill(AgentKind);
     /// Remove the agent skill of one agent.
@@ -311,6 +362,9 @@ id_actions! {
     EditSnippet(SnippetId);
     /// Ask for confirmation, then delete a snippet.
     DeleteSnippet(SnippetId);
+    /// Send a snippet where 撰写窗格 sends: the terminal in front, or every
+    /// terminal of 命令广播.
+    SendComposeSnippet(SnippetId);
     /// Open the rename dialog of a snippet category.
     RenameSnippetCategory(SnippetCategoryId);
     /// Ask for confirmation, then delete a snippet category with the
@@ -318,6 +372,27 @@ id_actions! {
     DeleteSnippetCategory(SnippetCategoryId);
     /// Fold a category of 命令片段 away, or unfold it; `None` is 未分类.
     ToggleSnippetCategory(Option<SnippetCategoryId>);
+
+    /// Keep a new local terminal in 项目, in a group or at the top, and
+    /// open it.
+    NewSavedTerminal(Option<TerminalGroupId>);
+    /// Hide a group's terminals in 项目, or show them again.
+    ToggleTerminalGroup(TerminalGroupId);
+    /// Open the rename dialog of a group of 项目.
+    RenameTerminalGroup(TerminalGroupId);
+    /// Ask for confirmation, then delete a group of 项目 with its
+    /// terminals; their open tabs stay.
+    DeleteTerminalGroup(TerminalGroupId);
+    /// Bring a saved terminal's tab to the front, or open it in the folder
+    /// it was last in.
+    OpenSavedTerminal(SavedTerminalId);
+    /// Close a saved terminal's tab; it stays in 项目.
+    CloseSavedTerminal(SavedTerminalId);
+    /// Open the rename dialog of a saved terminal.
+    RenameSavedTerminal(SavedTerminalId);
+    /// Ask for confirmation, then delete a saved terminal; its open tab
+    /// stays.
+    DeleteSavedTerminal(SavedTerminalId);
 
     /// Start a port forward over a connection of its own.
     StartForward(ForwardId);
@@ -344,6 +419,15 @@ id_actions! {
 pub struct MoveHostNode {
     pub source: HostNode,
     pub destination: NodeDrop,
+}
+
+/// A row of 项目 dropped where it goes: a group among the groups, a
+/// terminal among a group's terminals.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = shellrs, no_json)]
+pub struct MoveTerminalNode {
+    pub source: TerminalNode,
+    pub destination: TerminalDrop,
 }
 
 /// Ask for confirmation, then end a process of the host of the SSH terminal
@@ -456,10 +540,12 @@ pub enum ToolKind {
     Connections,
     Monitor,
     Gpu,
+    /// 项目, the one tool of local terminals.
+    Projects,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 11] = [
+    pub const ALL: [ToolKind; 12] = [
         ToolKind::Snippets,
         ToolKind::History,
         ToolKind::Files,
@@ -471,10 +557,12 @@ impl ToolKind {
         ToolKind::Connections,
         ToolKind::Monitor,
         ToolKind::Gpu,
+        ToolKind::Projects,
     ];
 
-    /// What `settings.json` calls the tool in 侧栏功能. Never changed once
-    /// released: a renamed key would bring a hidden tool back.
+    /// What `settings.json` calls the tool in 侧栏功能, and the database
+    /// in a host's `sidebar_tool`. Never changed once released: a renamed
+    /// key would bring a hidden tool back, and lose the tool a host keeps.
     pub fn key(self) -> &'static str {
         match self {
             ToolKind::Snippets => "snippets",
@@ -488,7 +576,13 @@ impl ToolKind {
             ToolKind::Connections => "connections",
             ToolKind::Monitor => "monitor",
             ToolKind::Gpu => "gpu",
+            ToolKind::Projects => "projects",
         }
+    }
+
+    /// The tool `key` names; none for a key no tool has.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tool| tool.key() == key)
     }
 
     /// Whether the sidebar offers the tool until the user says otherwise.
@@ -511,6 +605,7 @@ impl ToolKind {
             ToolKind::Connections => t!("tools.kind.connections"),
             ToolKind::Monitor => t!("tools.kind.monitor"),
             ToolKind::Gpu => "GPU/NPU".into(),
+            ToolKind::Projects => t!("tools.kind.projects"),
         }
     }
 
@@ -530,6 +625,7 @@ impl ToolKind {
             ToolKind::Connections => CatalogIcon::Network,
             ToolKind::Monitor => CatalogIcon::Activity,
             ToolKind::Gpu => CatalogIcon::Gpu,
+            ToolKind::Projects => CatalogIcon::FolderCode,
         })
     }
 }

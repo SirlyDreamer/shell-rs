@@ -27,10 +27,12 @@ use unicode_width::UnicodeWidthChar as _;
 use crate::app::{
     CatalogIcon, ClearTerminal, CopyTerminal, DismissTerminalFind, FindInTerminal,
     FindNextInTerminal, FindPreviousInTerminal, PasteTerminal, SelectAllTerminal,
+    ToggleComposePane,
 };
 use crate::connection::{ConnectionPromptReply, Latency};
 use crate::i18n::{UiLocale, t};
 
+use super::box_drawing::{self, CellMetrics};
 use super::font;
 use super::mouse::{self, MouseReport, ReportButton, ReportKind};
 use super::scrollbar::ScrollbackHandle;
@@ -121,6 +123,13 @@ pub struct TerminalMenuItems {
 
 pub type CopyItems = Rc<dyn Fn(PopupMenu, &App) -> PopupMenu>;
 pub type CommandItems = Rc<dyn Fn(PopupMenu, &TerminalLifecycle) -> PopupMenu>;
+
+/// Whether 撰写窗格 shows, for the check of its item in the context menu.
+/// The workspace owns the pane and keeps this in step.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ComposePaneShown(pub bool);
+
+impl Global for ComposePaneShown {}
 
 /// The open find bar of one terminal.
 struct FindBar {
@@ -495,6 +504,12 @@ impl TerminalView {
 
     pub fn title(&self, cx: &App) -> Option<String> {
         self.engine.read(cx).title().map(str::to_owned)
+    }
+
+    /// The last lines of output, to draw again when the terminal next
+    /// opens; `None` while a full-screen program has the screen.
+    pub fn kept_output(&self, cx: &App) -> Option<Vec<u8>> {
+        self.engine.read(cx).kept_output()
     }
 
     pub fn latency(&self, cx: &App) -> Option<Latency> {
@@ -1033,6 +1048,9 @@ impl TerminalView {
                 .is_some();
         let action_context = self.focus_handle.clone();
         let owner_items = self.menu_items.clone();
+        let compose_shown = cx
+            .try_global::<ComposePaneShown>()
+            .is_some_and(|shown| shown.0);
         let menu = PopupMenu::build(window, cx, move |menu, _, cx| {
             let menu = menu
                 .action_context(action_context)
@@ -1069,6 +1087,11 @@ impl TerminalView {
                     Icon::new(CatalogIcon::Eraser),
                     Box::new(ClearTerminal),
                     !can_clear,
+                )
+                .menu_with_check(
+                    t!("terminal.menu.compose"),
+                    compose_shown,
+                    Box::new(ToggleComposePane),
                 );
             match &owner_items {
                 Some(items) => (items.commands)(menu.separator(), &lifecycle),
@@ -1304,6 +1327,9 @@ impl Render for TerminalView {
             // The margin and the part of a cell the grid does not fill are
             // the terminal's too.
             .bg(TerminalColors::current(cx).background())
+            // An I-beam over the text, as in other terminals; the scrollbar
+            // and a link under the open key set their own pointer over it.
+            .cursor_text()
             .child(terminal)
             // Over the whole margin, so the thumb lies mostly beside the text.
             .child(
@@ -1445,6 +1471,8 @@ struct TerminalPaintState {
     viewport: TerminalViewport,
     lines: Vec<ShapedLine>,
     backgrounds: Vec<PaintQuad>,
+    /// Box drawing and blocks, each clipped to its cell.
+    drawn: Vec<(Bounds<Pixels>, PaintQuad)>,
     preedit: Vec<PreeditPaintCell>,
     cursor: Option<PaintQuad>,
     ime_cursor_bounds: Bounds<Pixels>,
@@ -1478,12 +1506,13 @@ struct CachedRow {
     hovered_link: Option<usize>,
     line: ShapedLine,
     backgrounds: Vec<PaintQuad>,
+    drawn: Vec<(Bounds<Pixels>, PaintQuad)>,
 }
 
 struct PreeditPaintCell {
     bounds: Bounds<Pixels>,
     line: ShapedLine,
-    background: Option<PaintQuad>,
+    background: PaintQuad,
 }
 
 impl IntoElement for TerminalElement {
@@ -1562,6 +1591,8 @@ impl Element for TerminalElement {
             window.mouse_position(),
         )
         .and_then(|(column, row)| self.snapshot.lines.get(row)?.get(column)?.link);
+        let scale = window.scale_factor();
+        let metrics = CellMetrics::new(cell_width, line_height, font_size, scale);
         let key = RowPaintKey {
             bounds,
             font: text_style.font(),
@@ -1583,6 +1614,7 @@ impl Element for TerminalElement {
         cache.rows.resize_with(self.snapshot.rows, || None);
         let mut lines = Vec::with_capacity(self.snapshot.rows);
         let mut backgrounds = Vec::new();
+        let mut drawn = Vec::new();
         for (row_index, row) in self.snapshot.lines.iter().enumerate() {
             let hovered_link =
                 hovered_link.filter(|link| row.iter().any(|cell| cell.link == Some(*link)));
@@ -1592,9 +1624,11 @@ impl Element for TerminalElement {
             {
                 lines.push(cached.line.clone());
                 backgrounds.extend(cached.backgrounds.iter().cloned());
+                drawn.extend(cached.drawn.iter().cloned());
                 continue;
             }
             let background_index = backgrounds.len();
+            let drawn_index = drawn.len();
             let mut text = String::new();
             let mut runs = Vec::new();
             let mut background_start = 0;
@@ -1632,8 +1666,6 @@ impl Element for TerminalElement {
 
                 let character = painted_cell_text(&cell.character, cell.flags);
                 let font = terminal_font(text_style.font(), cell.flags);
-                let len = character.len();
-                text.push_str(character);
                 // A rule's color, dimmed as the program dimmed the text.
                 let highlight = cell.highlight.map(|highlight| {
                     let color = highlight.hsla();
@@ -1651,16 +1683,36 @@ impl Element for TerminalElement {
                 // A rule colors a link's text too; the underline still says
                 // it is one.
                 let text_color = highlight.or(link).unwrap_or(foreground);
+                let color = if cell.selected {
+                    palette.foreground
+                } else if cell.search == SearchMark::Focused {
+                    cx.theme().warning_foreground
+                } else {
+                    text_color
+                };
+                // Drawn here, a space in the line keeps the cell.
+                let mut characters = character.chars();
+                let shapes = match (characters.next(), characters.next()) {
+                    (Some(character), None) => box_drawing::shapes(character, metrics),
+                    _ => None,
+                };
+                let character = match shapes {
+                    Some(shapes) => {
+                        let cell = geometry.cell_bounds(column, row_index, 1);
+                        drawn.extend(
+                            box_drawing::quads(&shapes, cell.origin, scale, color)
+                                .map(|quad| (cell, quad)),
+                        );
+                        " "
+                    }
+                    None => character,
+                };
+                let len = character.len();
+                text.push_str(character);
                 runs.push(TextRun {
                     len,
                     font,
-                    color: if cell.selected {
-                        palette.foreground
-                    } else if cell.search == SearchMark::Focused {
-                        cx.theme().warning_foreground
-                    } else {
-                        text_color
-                    },
+                    color,
                     background_color: None,
                     underline: match link {
                         Some(color) => Some(UnderlineStyle {
@@ -1707,6 +1759,7 @@ impl Element for TerminalElement {
                 hovered_link,
                 line: line.clone(),
                 backgrounds: backgrounds[background_index..].to_vec(),
+                drawn: drawn[drawn_index..].to_vec(),
             });
             lines.push(line);
         }
@@ -1755,6 +1808,7 @@ impl Element for TerminalElement {
             viewport,
             lines,
             backgrounds,
+            drawn,
             preedit,
             cursor,
             ime_cursor_bounds,
@@ -1799,10 +1853,13 @@ impl Element for TerminalElement {
                     cx,
                 );
             }
-            for cell in state.preedit.iter_mut() {
-                if let Some(background) = cell.background.take() {
-                    window.paint_quad(background);
-                }
+            for (cell, quad) in state.drawn.drain(..) {
+                window.with_content_mask(Some(ContentMask { bounds: cell }), |window| {
+                    window.paint_quad(quad)
+                });
+            }
+            for cell in state.preedit.drain(..) {
+                window.paint_quad(cell.background);
                 let _ = cell.line.paint(
                     cell.bounds.origin,
                     cell.bounds.size.height,
@@ -2148,10 +2205,18 @@ fn build_preedit(
                 &[run],
                 Some(viewport.geometry.cell_width * width as f32),
             );
+            // The composition covers the cells it lies on, as other
+            // terminals draw it: with the cursor back inside a line, the
+            // text after it would otherwise show through (#64).
+            let background = if selected {
+                selection_color
+            } else {
+                palette.background
+            };
             painted.push(PreeditPaintCell {
                 bounds: cell_bounds,
                 line,
-                background: selected.then(|| fill(cell_bounds, selection_color)),
+                background: fill(cell_bounds, background),
             });
         }
 
@@ -2354,6 +2419,14 @@ pub(crate) fn encode_key(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8
     if keystroke.modifiers.platform {
         return None;
     }
+    if mode.intersects(
+        TermMode::DISAMBIGUATE_ESC_CODES
+            | TermMode::REPORT_EVENT_TYPES
+            | TermMode::REPORT_ALL_KEYS_AS_ESC,
+    ) && let Some(sequence) = encode_kitty_key(keystroke)
+    {
+        return Some(sequence);
+    }
     let modifiers = keystroke.modifiers;
     let key = keystroke.key.as_str();
     let app_cursor = mode.contains(TermMode::APP_CURSOR);
@@ -2420,6 +2493,54 @@ pub(crate) fn encode_key(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8
     Some(sequence)
 }
 
+/// A key as the kitty keyboard protocol tells it apart, once a program
+/// asked for that: `CSI code ; modifiers u` for Esc, and for Enter, Tab,
+/// Backspace, the space bar and characters typed with modifiers other than
+/// Shift alone. Shift+Enter, which otherwise sends what Enter does, is how
+/// Claude Code takes a new line. Every other key goes as it does without
+/// the protocol, which the protocol keeps: plain Enter still runs `reset`
+/// after a program that left the protocol on.
+///
+/// Only what the protocol's first flag asks for, and only presses: a
+/// program asking for more gets this much and reads the rest as it would
+/// without the protocol.
+fn encode_kitty_key(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    let modifiers = keystroke.modifiers;
+    let (code, text) = match keystroke.key.as_str() {
+        "escape" => (27, false),
+        "enter" => (13, false),
+        "tab" => (9, false),
+        "backspace" => (127, false),
+        "space" => (32, true),
+        key => {
+            let mut characters = key.chars();
+            let character = characters.next()?;
+            if characters.next().is_some() {
+                // A named key: arrows, F1… go as they do without the protocol.
+                return None;
+            }
+            // Letters by their lowercase, as the protocol numbers them.
+            (u32::from(character.to_ascii_lowercase()), true)
+        }
+    };
+    let modified = modifiers.control || modifiers.alt || (modifiers.shift && !text);
+    if !modified && code != 27 {
+        return None;
+    }
+    let modifier = 1
+        + u8::from(modifiers.shift)
+        + u8::from(modifiers.alt) * 2
+        + u8::from(modifiers.control) * 4;
+    Some(
+        if modifier == 1 {
+            format!("\x1b[{code}u")
+        } else {
+            format!("\x1b[{code};{modifier}u")
+        }
+        .into_bytes(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::term::TermMode;
@@ -2433,6 +2554,136 @@ mod tests {
 
     fn key(source: &str) -> Keystroke {
         Keystroke::parse(source).unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn cached_box_drawing_survives_cursor_frames_and_moves_with_the_terminal(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::component::Root;
+        use gpui_kit::test::TestWindowExt as _;
+        use gpui_kit::{AppContext as _, Element as _, Styled as _};
+        use std::rc::Rc;
+        use std::sync::{Arc, mpsc};
+
+        use crate::terminal::{
+            TerminalSize, TerminalTransport, TerminalTransportCommand, TerminalTransportEvent,
+            TerminalTransportFactory,
+        };
+
+        // A view needs a transport, but this test supplies its rendered
+        // snapshot directly and never opens a PTY or a connection.
+        struct EmptyTransport;
+        impl TerminalTransportFactory for EmptyTransport {
+            fn create(&self) -> Box<dyn TerminalTransport> {
+                Box::new(Self)
+            }
+        }
+        impl TerminalTransport for EmptyTransport {
+            fn run(
+                self: Box<Self>,
+                _: TerminalSize,
+                _: mpsc::Receiver<TerminalTransportCommand>,
+                _: async_channel::Sender<TerminalTransportEvent>,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        cx.update(gpui_kit::init);
+        let handle = cx.open_window(size(px(640.), px(240.)), |window, cx| {
+            let view = cx.new(|cx| {
+                super::TerminalView::new(
+                    "cached-drawing",
+                    |_| "terminal".into(),
+                    Arc::new(EmptyTransport),
+                    window,
+                    cx,
+                )
+            });
+            Root::new(cx.new(|_| PaintProbe(view)), window, cx)
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+        struct PaintProbe(gpui_kit::Entity<super::TerminalView>);
+        impl gpui_kit::Render for PaintProbe {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                cx: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                let view = self.0.read(cx);
+                let mut snapshot = view.engine.read(cx).snapshot();
+                let blank = snapshot.lines[0][0].clone();
+                snapshot.columns = 3;
+                snapshot.rows = 1;
+                snapshot.cursor_row = None;
+                snapshot.lines = vec![
+                    ['┼', '░', 'A']
+                        .into_iter()
+                        .map(|character| super::super::TerminalCell {
+                            character: character.to_string(),
+                            ..blank.clone()
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                ];
+                let mut element = super::TerminalElement {
+                    view: self.0.clone(),
+                    row_cache: Rc::default(),
+                    snapshot,
+                    focus_handle: view.focus_handle(),
+                    cursor_visible: true,
+                    marked_text: String::new(),
+                    marked_selection: 0..0,
+                    requested_size: view.requested_size,
+                };
+                // Exercise prepaint inside the real window's prepaint phase.
+                gpui_kit::canvas(
+                    move |_, window, cx| {
+                        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(80.)));
+                        let first = element.prepaint(None, None, bounds, &mut (), window, cx);
+                        assert!(
+                            !first.drawn.is_empty(),
+                            "box and shade glyphs must be drawn"
+                        );
+                        // Only cursor visibility changes: every row retains its identity.
+                        element.cursor_visible = false;
+                        let cached = element.prepaint(None, None, bounds, &mut (), window, cx);
+                        assert_eq!(cached.drawn.len(), first.drawn.len());
+                        for ((cell, quad), (cached_cell, cached_quad)) in
+                            first.drawn.iter().zip(&cached.drawn)
+                        {
+                            assert_eq!(cached_cell, cell);
+                            assert_eq!(cached_quad.bounds, quad.bounds);
+                            assert_eq!(cached_quad.background, quad.background);
+                        }
+                        // Splitting or moving the terminal invalidates absolute geometry.
+                        let offset = point(px(24.), px(12.));
+                        let moved = element.prepaint(
+                            None,
+                            None,
+                            Bounds::new(bounds.origin + offset, bounds.size),
+                            &mut (),
+                            window,
+                            cx,
+                        );
+                        assert_eq!(moved.drawn.len(), first.drawn.len());
+                        for ((cell, quad), (moved_cell, moved_quad)) in
+                            first.drawn.iter().zip(&moved.drawn)
+                        {
+                            assert_eq!(moved_cell.origin, cell.origin + offset);
+                            assert_eq!(moved_quad.bounds.origin, quad.bounds.origin + offset);
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .size_full()
+            }
+        }
     }
 
     #[test]
@@ -2498,6 +2749,57 @@ mod tests {
         assert_eq!(
             encode_key(&key("shift-up"), TermMode::default()),
             Some(b"\x1b[1;2A".to_vec())
+        );
+    }
+
+    #[test]
+    fn keys_are_told_apart_once_a_program_asks() {
+        let kitty = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS;
+        for (name, sequence) in [
+            ("shift-enter", "\x1b[13;2u"),
+            ("alt-enter", "\x1b[13;3u"),
+            ("ctrl-enter", "\x1b[13;5u"),
+            ("escape", "\x1b[27u"),
+            ("shift-tab", "\x1b[9;2u"),
+            ("alt-backspace", "\x1b[127;3u"),
+            ("ctrl-space", "\x1b[32;5u"),
+            ("ctrl-c", "\x1b[99;5u"),
+            ("ctrl-shift-a", "\x1b[97;6u"),
+            ("alt-b", "\x1b[98;3u"),
+        ] {
+            assert_eq!(
+                encode_key(&key(name), kitty),
+                Some(sequence.as_bytes().to_vec()),
+                "{name}"
+            );
+        }
+        // What only one key sends goes as it does without the protocol.
+        for (name, sequence) in [
+            ("enter", "\r"),
+            ("tab", "\t"),
+            ("backspace", "\x7f"),
+            ("up", "\x1b[A"),
+            ("shift-up", "\x1b[1;2A"),
+            ("pagedown", "\x1b[6~"),
+        ] {
+            assert_eq!(
+                encode_key(&key(name), kitty),
+                Some(sequence.as_bytes().to_vec()),
+                "{name}"
+            );
+        }
+        // Text is typed, Shift or not.
+        for name in ["a", "shift-a", "space", "shift-space"] {
+            assert_eq!(encode_key(&key(name), kitty), None, "{name}");
+        }
+        // Without the protocol Shift+Enter is Enter, as everywhere.
+        assert_eq!(
+            encode_key(&key("shift-enter"), TermMode::default()),
+            Some(b"\r".to_vec())
+        );
+        assert_eq!(
+            encode_key(&key("alt-enter"), TermMode::default()),
+            Some(b"\x1b\r".to_vec())
         );
     }
 

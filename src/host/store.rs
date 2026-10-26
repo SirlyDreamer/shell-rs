@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,25 +7,35 @@ use std::sync::Arc;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use zeroize::Zeroizing;
 
+use crate::app::ToolKind;
 use crate::i18n::t;
 use crate::secrets::{NoSecretStore, SecretRef, SharedSecretStore, TemporarySecretStore};
 
-use super::database::now_seconds;
+use super::database::{now_millis, now_seconds};
 use super::private_key::{is_kept_in, moved_key, write_key_file};
 use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
     ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, GroupPathError, GroupPlan, Host,
     HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
-    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet,
-    SnippetCategory, SnippetScope, SshLink, StoredData, TelnetLogin,
+    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SavedTerminal,
+    SavedTerminalTab, SerialLine, Snippet, SnippetCategory, SnippetScope, SshLink, StoredData,
+    TelnetLogin, TerminalGroup,
 };
 
+mod saved_terminals;
 mod snippets;
+mod sync;
+
+pub use sync::{
+    ApplyError, SecretEndpoint, SecretPlace, SecretSource, SecretWork, SecretsRead, SecretsWritten,
+    SyncExport, read_secrets,
+};
 
 /// The single source of truth for hosts, groups, the rules that belong
-/// to hosts (bookmarks, port forwards), the credentials hosts log in with
-/// and the command snippets. Created once by the workspace and shared with every panel and
-/// dialog; consumers observe it.
+/// to hosts (bookmarks, port forwards), the credentials hosts log in with,
+/// the command snippets and the saved local terminals. Created once by
+/// the workspace and shared with every panel and dialog; consumers observe
+/// it.
 ///
 /// A host using a credential keeps a copy of the credential's user name,
 /// so everything that shows or keys by `user@host:port` reads the host
@@ -72,6 +82,8 @@ pub struct HostStore {
     recent: Vec<HostId>,
     /// SFTP bookmarks per host and pane, in the order they were added.
     bookmarks: HashMap<(HostId, BookmarkSide), Vec<String>>,
+    /// Each bookmark's place in its pane and when it was last edited.
+    bookmark_meta: HashMap<(HostId, BookmarkSide, String), BookmarkMeta>,
     /// Port-forwarding rules, in the order the forward list shows them.
     forwards: Vec<ForwardRule>,
     next_forward_id: u64,
@@ -83,6 +95,14 @@ pub struct HostStore {
     next_snippet_id: u64,
     snippet_categories: Vec<SnippetCategory>,
     next_snippet_category_id: u64,
+    /// 项目's groups and the local terminals in them, each in the order
+    /// made.
+    terminal_groups: Vec<TerminalGroup>,
+    next_terminal_group_id: u64,
+    saved_terminals: Vec<SavedTerminal>,
+    next_saved_terminal_id: u64,
+    /// The saved terminals open as the workspace last said, in tab order.
+    saved_terminal_tabs: Vec<SavedTerminalTab>,
     /// `None` for a memory-only store, as used by tests.
     database: Option<HostDatabase>,
     /// Where passwords go: the keychain given to `with_secrets`, under a
@@ -93,12 +113,40 @@ pub struct HostStore {
     /// form are kept. `None` without a database to remember them, which is
     /// also how most tests run: the form then offers key files only.
     key_dir: Option<PathBuf>,
+    /// Where the saved terminals' kept output goes, a file each. `None`
+    /// without a database, as in most tests: nothing is kept then.
+    terminal_output_dir: Option<PathBuf>,
     /// Inside [`Self::capture_failures`], the failures reported so far,
     /// besides the events that report them.
     capturing: RefCell<Option<Vec<SharedString>>>,
     /// Inside [`Self::in_one_transaction`], the failures already reported
     /// as events, so a burst of writes failing the same way says so once.
     batch: RefCell<Option<HashSet<SharedString>>>,
+    /// Goes up with every edit of what syncs: a sync round that read the
+    /// records before one is not applied over it.
+    sync_revision: u64,
+    /// When each secret was last edited, by its sync record's kind and id.
+    /// Never the secret.
+    secret_edits: HashMap<(String, String), u64>,
+    /// The secrets a round brought that are not written yet: until they
+    /// are, rounds are told the store does not hold them as it should.
+    sync_pending: BTreeSet<shellrs_sync::RecordKey>,
+    /// The sync state as last stored, `None` while sync is not set up.
+    sync_state: Option<Vec<u8>>,
+}
+
+/// A bookmark's order among its pane's, and when it was last edited
+/// (added or moved).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BookmarkMeta {
+    pub sort_order: i64,
+    pub edited_ms: u64,
+}
+
+/// When an edit made now is dated: now, or just after `previous` should
+/// the clock not have moved on, so an edit is never dated like the last.
+fn edited_after(previous: u64) -> u64 {
+    now_millis().max(previous.saturating_add(1))
 }
 
 /// How many hosts the start page lists as recently connected.
@@ -130,12 +178,21 @@ enum Change {
     DeleteGroup,
     Recent,
     HostOs,
+    SidebarTool,
     NewSnippet,
     SaveSnippet,
     DeleteSnippet,
     NewSnippetCategory,
     RenameSnippetCategory,
     DeleteSnippetCategory,
+    NewTerminalGroup,
+    SaveTerminalGroup,
+    DeleteTerminalGroup,
+    NewSavedTerminal,
+    SaveSavedTerminal,
+    DeleteSavedTerminal,
+    MoveTerminalNode,
+    SavedTerminalTabs,
     Batch,
 }
 
@@ -167,6 +224,7 @@ impl Change {
             Change::DeleteGroup => t!("host.store.not_saved.delete_group", error = error),
             Change::Recent => t!("host.store.not_saved.recent", error = error),
             Change::HostOs => t!("host.store.not_saved.host_os", error = error),
+            Change::SidebarTool => t!("host.store.not_saved.sidebar_tool", error = error),
             Change::NewSnippet => t!("host.store.not_saved.new_snippet", error = error),
             Change::SaveSnippet => t!("host.store.not_saved.save_snippet", error = error),
             Change::DeleteSnippet => t!("host.store.not_saved.delete_snippet", error = error),
@@ -181,6 +239,30 @@ impl Change {
                 "host.store.not_saved.delete_snippet_category",
                 error = error
             ),
+            Change::NewTerminalGroup => {
+                t!("host.store.not_saved.new_terminal_group", error = error)
+            }
+            Change::SaveTerminalGroup => {
+                t!("host.store.not_saved.save_terminal_group", error = error)
+            }
+            Change::DeleteTerminalGroup => {
+                t!("host.store.not_saved.delete_terminal_group", error = error)
+            }
+            Change::NewSavedTerminal => {
+                t!("host.store.not_saved.new_saved_terminal", error = error)
+            }
+            Change::SaveSavedTerminal => {
+                t!("host.store.not_saved.save_saved_terminal", error = error)
+            }
+            Change::DeleteSavedTerminal => {
+                t!("host.store.not_saved.delete_saved_terminal", error = error)
+            }
+            Change::MoveTerminalNode => {
+                t!("host.store.not_saved.move_terminal_node", error = error)
+            }
+            Change::SavedTerminalTabs => {
+                t!("host.store.not_saved.saved_terminal_tabs", error = error)
+            }
             Change::Batch => t!("host.store.not_saved.batch", error = error),
         }
     }
@@ -218,6 +300,9 @@ fn secret_failure(secret: &SecretRef, writing: bool) -> fn(&str) -> SharedString
         (SecretRef::Temporary { .. }, _) => {
             |error| t!("host.store.secret.temporary", error = error)
         }
+        (SecretRef::SyncKeyring | SecretRef::SyncLogin, _) => {
+            |error| t!("host.store.secret.sync_keyring", error = error)
+        }
     }
 }
 
@@ -246,6 +331,7 @@ impl HostStore {
             starting_terminals: Vec::new(),
             recent: Vec::new(),
             bookmarks: HashMap::new(),
+            bookmark_meta: HashMap::new(),
             forwards: Vec::new(),
             next_forward_id: 1,
             credentials: Vec::new(),
@@ -254,11 +340,21 @@ impl HostStore {
             next_snippet_id: 1,
             snippet_categories: Vec::new(),
             next_snippet_category_id: 1,
+            terminal_groups: Vec::new(),
+            next_terminal_group_id: 1,
+            saved_terminals: Vec::new(),
+            next_saved_terminal_id: 1,
+            saved_terminal_tabs: Vec::new(),
             database: None,
             secrets: Arc::new(TemporarySecretStore::new(Arc::new(NoSecretStore))),
             key_dir: None,
+            terminal_output_dir: None,
             capturing: RefCell::new(None),
             batch: RefCell::new(None),
+            sync_revision: 0,
+            secret_edits: HashMap::new(),
+            sync_pending: BTreeSet::new(),
+            sync_state: None,
         }
     }
 
@@ -273,6 +369,15 @@ impl HostStore {
     /// beside the database; UI tests use a temporary directory.
     pub fn with_key_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.key_dir = Some(dir.into());
+        self
+    }
+
+    /// Keep the saved terminals' output in `dir`. `main` puts it beside
+    /// the database; UI tests use a temporary directory. What is kept there
+    /// for terminals no longer saved goes.
+    pub fn with_terminal_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.terminal_output_dir = Some(dir.into());
+        self.forget_kept_outputs_but_saved();
         self
     }
 
@@ -315,10 +420,22 @@ impl HostStore {
             credentials,
             snippet_categories,
             snippets,
+            terminal_groups,
+            saved_terminals,
+            saved_terminal_tabs,
+            secret_edits,
+            sync_pending,
         } = database.load()?;
+        let sync_state = database.sync_state()?;
         recent.truncate(MAX_RECENT);
         let mut bookmarks: HashMap<_, Vec<String>> = HashMap::new();
-        for (host, side, path) in stored_bookmarks {
+        let mut bookmark_meta = HashMap::new();
+        for (host, side, path, sort_order, edited_ms) in stored_bookmarks {
+            let meta = BookmarkMeta {
+                sort_order,
+                edited_ms,
+            };
+            bookmark_meta.insert((host, side, path.clone()), meta);
             bookmarks.entry((host, side)).or_default().push(path);
         }
         // A host using a credential has no user name of its own on disk:
@@ -341,10 +458,15 @@ impl HostStore {
                 .max()
                 .unwrap_or(0)
                 + 1,
+            next_terminal_group_id: terminal_groups.iter().map(|g| g.id.0).max().unwrap_or(0) + 1,
+            next_saved_terminal_id: saved_terminals.iter().map(|t| t.id.0).max().unwrap_or(0) + 1,
             forwards,
             credentials,
             snippets,
             snippet_categories,
+            terminal_groups,
+            saved_terminals,
+            saved_terminal_tabs,
             groups,
             hosts,
             temporary: Vec::new(),
@@ -352,11 +474,25 @@ impl HostStore {
             starting_terminals: Vec::new(),
             recent,
             bookmarks,
+            bookmark_meta,
             database: Some(database),
             secrets: Arc::new(TemporarySecretStore::new(Arc::new(NoSecretStore))),
             key_dir: None,
+            terminal_output_dir: None,
             capturing: RefCell::new(None),
             batch: RefCell::new(None),
+            sync_revision: 0,
+            secret_edits,
+            sync_pending: sync_pending
+                .into_iter()
+                .filter_map(|(kind, id)| {
+                    Some(shellrs_sync::RecordKey::new(
+                        shellrs_sync::Kind::parse(&kind)?,
+                        id,
+                    ))
+                })
+                .collect(),
+            sync_state,
         })
     }
 
@@ -713,8 +849,15 @@ impl HostStore {
         let mut host = Host::new(id, draft);
         host.public_id = self.unused_public_id();
         host.sort_order = sort_order;
+        host.edited_ms = edited_after(0);
         self.hosts.push(host);
+        self.sync_revision += 1;
         id
+    }
+
+    /// The count of edits to what syncs; see `sync_revision`.
+    pub fn sync_revision(&self) -> u64 {
+        self.sync_revision
     }
 
     /// A [`PublicId`] no host in the store has yet.
@@ -767,18 +910,22 @@ impl HostStore {
         };
         // The form owns none of these, so rebuilding from the draft must not
         // drop them.
-        let os = host.os;
+        let (os, sidebar_tool) = (host.os, host.sidebar_tool);
         let sort_order = host.sort_order;
         let old_group = host.group;
         let public_id = host.public_id.clone();
+        let edited_ms = host.edited_ms;
         *host = Host::new(id, draft);
         host.public_id = public_id;
         host.os = os;
+        host.sidebar_tool = sidebar_tool;
         host.sort_order = if host.group == old_group {
             sort_order
         } else {
             new_order
         };
+        host.edited_ms = edited_after(edited_ms);
+        self.sync_revision += 1;
         true
     }
 
@@ -787,9 +934,11 @@ impl HostStore {
     /// not drop a working connection behind it.
     pub fn remove(&mut self, id: HostId, cx: &mut Context<Self>) -> bool {
         let connection = self.connection(id);
+        let emptied = self.jumping_through(&[id]);
         let removed = self.remove_unnotified(id);
         if removed {
             self.persist(Change::DeleteHost, cx, |db| db.remove_host(id));
+            self.write_hops_emptied(&emptied, cx);
             if let Some(connection) = connection {
                 self.forget_passwords_of(&connection, cx);
             }
@@ -801,21 +950,30 @@ impl HostStore {
     pub fn remove_unnotified(&mut self, id: HostId) -> bool {
         let before = self.hosts.len();
         self.hosts.retain(|s| s.id != id);
-        // As the database's `ON DELETE SET NULL` does.
+        if self.hosts.len() == before {
+            return false;
+        }
+        // As the database's `ON DELETE SET NULL` does, which is an edit of
+        // those hosts on the user's behalf (`write_hops_emptied`).
         for host in &mut self.hosts {
-            if let Route::Jump(hops) = &mut host.route {
+            if let Route::Jump(hops) = &mut host.route
+                && hops.contains(&Some(id))
+            {
                 for hop in hops.iter_mut().filter(|hop| **hop == Some(id)) {
                     *hop = None;
                 }
+                host.edited_ms = edited_after(host.edited_ms);
             }
         }
+        self.sync_revision += 1;
         self.recent.retain(|recent| *recent != id);
         // The database drops both through `ON DELETE CASCADE`.
         self.bookmarks.retain(|(host, _), _| *host != id);
+        self.bookmark_meta.retain(|(host, _, _), _| *host != id);
         self.forwards.retain(|rule| rule.host != id);
         self.snippets
             .retain(|snippet| snippet.scope != SnippetScope::Host(id));
-        self.hosts.len() != before
+        true
     }
 
     /// Copy a host as `<name> 副本` (`<name> copy`), placed right after the
@@ -837,21 +995,26 @@ impl HostStore {
         let ix = self.hosts.iter().position(|s| s.id == id)?;
         let mut draft = self.hosts[ix].draft();
         draft.name = t!("host.store.copy_name", name = draft.name);
-        // Same host, so the copy already knows what it will find there.
-        let os = self.hosts[ix].os;
+        // Same host, so the copy already knows what it will find there,
+        // and opens the sidebar as the original does.
+        let (os, sidebar_tool) = (self.hosts[ix].os, self.hosts[ix].sidebar_tool);
         let copy_id = HostId(self.next_host_id);
         self.next_host_id += 1;
         let mut copy = Host::new(copy_id, draft);
         // A copy is another host, so a third party must not confuse the two.
         copy.public_id = self.unused_public_id();
         copy.os = os;
+        copy.sidebar_tool = sidebar_tool;
         copy.sort_order = self.hosts[ix].sort_order + 1;
+        copy.edited_ms = edited_after(0);
         for host in &mut self.hosts {
             if host.group == copy.group && host.sort_order >= copy.sort_order {
                 host.sort_order += 1;
+                host.edited_ms = edited_after(host.edited_ms);
             }
         }
         self.hosts.insert(ix + 1, copy);
+        self.sync_revision += 1;
         Some(copy_id)
     }
 
@@ -870,8 +1033,16 @@ impl HostStore {
         self.next_group_id += 1;
         let mut group = HostGroup::new(id, draft);
         group.sort_order = sort_order;
+        group.sync_id = self.unused_group_sync_id();
+        group.edited_ms = edited_after(0);
         self.groups.push(group);
+        self.sync_revision += 1;
         id
+    }
+
+    /// A sync id no group in the store has yet.
+    fn unused_group_sync_id(&self) -> PublicId {
+        PublicId::generate_unused(|id| self.groups.iter().any(|group| &group.sync_id == id))
     }
 
     /// Rename a group, and optionally move it under a different parent.
@@ -905,6 +1076,8 @@ impl HostStore {
         let old_parent = group.parent;
         let old_order = group.sort_order;
         let expanded = group.expanded;
+        let sync_id = group.sync_id.clone();
+        let edited_ms = group.edited_ms;
         *group = HostGroup::new(id, draft);
         group.expanded = expanded;
         group.sort_order = if group.parent == old_parent {
@@ -912,6 +1085,9 @@ impl HostStore {
         } else {
             new_order
         };
+        group.sync_id = sync_id;
+        group.edited_ms = edited_after(edited_ms);
+        self.sync_revision += 1;
         true
     }
 
@@ -936,8 +1112,9 @@ impl HostStore {
         // A link's host is not in the database: its bookmarks live as long
         // as it does.
         if !self.is_temporary(id) {
+            let meta = self.bookmark_meta(id, side, path);
             self.persist(Change::AddBookmark, cx, |db| {
-                db.insert_bookmark(id, side, path)
+                db.insert_bookmark(id, side, path, meta.sort_order, meta.edited_ms)
             });
         }
         cx.notify();
@@ -953,7 +1130,28 @@ impl HostStore {
             return false;
         }
         list.push(path.to_string());
+        let sort_order = list
+            .iter()
+            .filter_map(|other| self.bookmark_meta.get(&(id, side, other.clone())))
+            .map(|meta| meta.sort_order + 1)
+            .max()
+            .unwrap_or_default();
+        let meta = BookmarkMeta {
+            sort_order,
+            edited_ms: edited_after(0),
+        };
+        self.bookmark_meta
+            .insert((id, side, path.to_string()), meta);
+        self.sync_revision += 1;
         true
+    }
+
+    /// A bookmark's order and edit time.
+    pub fn bookmark_meta(&self, id: HostId, side: BookmarkSide, path: &str) -> BookmarkMeta {
+        self.bookmark_meta
+            .get(&(id, side, path.to_string()))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn remove_bookmark(
@@ -986,7 +1184,12 @@ impl HostStore {
         };
         let before = list.len();
         list.retain(|existing| existing != path);
-        list.len() != before
+        if list.len() == before {
+            return false;
+        }
+        self.bookmark_meta.remove(&(id, side, path.to_string()));
+        self.sync_revision += 1;
+        true
     }
 
     /// Move a bookmark to position `to` of its pane's list (WinSCP's 上移 /
@@ -1003,8 +1206,16 @@ impl HostStore {
             return false;
         }
         if !self.is_temporary(id) {
+            let order: Vec<(String, i64, u64)> = self
+                .bookmarks(id, side)
+                .iter()
+                .map(|path| {
+                    let meta = self.bookmark_meta(id, side, path);
+                    (path.clone(), meta.sort_order, meta.edited_ms)
+                })
+                .collect();
             self.persist(Change::BookmarkOrder, cx, |db| {
-                db.set_bookmark_order(id, side, self.bookmarks(id, side))
+                db.set_bookmark_order(id, side, &order)
             });
         }
         cx.notify();
@@ -1030,6 +1241,18 @@ impl HostStore {
         }
         let path = list.remove(from);
         list.insert(to, path);
+        // The pane is numbered again; what moved is edited.
+        for (order, moved) in (0_i64..).zip(list.iter()) {
+            let meta = self
+                .bookmark_meta
+                .entry((id, side, moved.clone()))
+                .or_default();
+            if meta.sort_order != order {
+                meta.sort_order = order;
+                meta.edited_ms = edited_after(meta.edited_ms);
+            }
+        }
+        self.sync_revision += 1;
         true
     }
 
@@ -1075,8 +1298,16 @@ impl HostStore {
         self.next_forward_id += 1;
         let mut rule = ForwardRule::new(id, draft);
         rule.sort_order = sort_order;
+        rule.sync_id = self.unused_forward_sync_id();
+        rule.edited_ms = edited_after(0);
         self.forwards.push(rule);
+        self.sync_revision += 1;
         Some(id)
+    }
+
+    /// A sync id no forwarding rule in the store has yet.
+    fn unused_forward_sync_id(&self) -> PublicId {
+        PublicId::generate_unused(|id| self.forwards.iter().any(|rule| &rule.sync_id == id))
     }
 
     /// Replace the editable fields of a rule; its place in the list is kept.
@@ -1110,8 +1341,19 @@ impl HostStore {
             return false;
         };
         let sort_order = rule.sort_order;
+        let sync_id = rule.sync_id.clone();
+        // Whether it starts with ShellRS is each device's own: changing
+        // only that is no edit.
+        let edited = rule.draft().with_auto_start(draft.auto_start) != draft;
+        let edited_ms = rule.edited_ms;
         *rule = ForwardRule::new(id, draft);
         rule.sort_order = sort_order;
+        rule.sync_id = sync_id;
+        rule.edited_ms = edited_ms;
+        if edited {
+            rule.edited_ms = edited_after(edited_ms);
+            self.sync_revision += 1;
+        }
         true
     }
 
@@ -1127,7 +1369,11 @@ impl HostStore {
     pub fn remove_forward_unnotified(&mut self, id: ForwardId) -> bool {
         let before = self.forwards.len();
         self.forwards.retain(|rule| rule.id != id);
-        self.forwards.len() != before
+        if self.forwards.len() == before {
+            return false;
+        }
+        self.sync_revision += 1;
+        true
     }
 
     /// Every credential, in list order.
@@ -1235,6 +1481,30 @@ impl HostStore {
             .count()
     }
 
+    /// The hosts other than `ids` that go through one of them.
+    fn jumping_through(&self, ids: &[HostId]) -> Vec<HostId> {
+        self.hosts
+            .iter()
+            .filter(|host| {
+                !ids.contains(&host.id) && host.route.jump_hosts().any(|hop| ids.contains(&hop))
+            })
+            .map(|host| host.id)
+            .collect()
+    }
+
+    /// Record when `hosts` lost a hop to a deleted host: the database
+    /// empties the hop itself (`ON DELETE SET NULL`).
+    fn write_hops_emptied(&self, hosts: &[HostId], cx: &mut Context<Self>) {
+        let edits: Vec<(HostId, u64)> = hosts
+            .iter()
+            .filter_map(|id| self.saved_host(*id))
+            .map(|host| (host.id, host.edited_ms))
+            .collect();
+        if !edits.is_empty() {
+            self.persist(Change::SaveHost, cx, |db| db.set_hosts_edited(&edits));
+        }
+    }
+
     /// What keeps a host an SSH host: the hosts that go through it as a
     /// jump host, and the port forwards that go via it.
     pub fn ssh_dependents(&self, id: HostId) -> (usize, usize) {
@@ -1263,8 +1533,22 @@ impl HostStore {
                 db.insert_credential(credential)
             });
         }
+        self.date_private_key(id);
         cx.notify();
         id
+    }
+
+    /// A key credential saved has its key file written just before (see
+    /// [`Self::save_private_key`]): date the key for sync, whether its
+    /// text changed or not, which costs a round nothing.
+    fn date_private_key(&mut self, id: CredentialId) {
+        if let Some(credential) = self
+            .credential(id)
+            .filter(|credential| credential.kind == CredentialKind::Key)
+        {
+            let keychain_id = credential.keychain_id.to_string();
+            self.stamp_secret(shellrs_sync::Kind::SecretPrivateKey, keychain_id);
+        }
     }
 
     pub fn insert_credential_unnotified(&mut self, draft: CredentialDraft) -> CredentialId {
@@ -1284,7 +1568,9 @@ impl HostStore {
                 .any(|credential| &credential.keychain_id == candidate)
         });
         credential.sort_order = sort_order;
+        credential.edited_ms = edited_after(0);
         self.credentials.push(credential);
+        self.sync_revision += 1;
         id
     }
 
@@ -1308,6 +1594,7 @@ impl HostStore {
                 db.update_credential(credential)
             });
         }
+        self.date_private_key(id);
         if previous.kind == CredentialKind::Password
             && self
                 .credential(id)
@@ -1345,9 +1632,12 @@ impl HostStore {
         };
         let keychain_id = credential.keychain_id.clone();
         let sort_order = credential.sort_order;
+        let edited_ms = credential.edited_ms;
         *credential = Credential::new(id, draft);
         credential.keychain_id = keychain_id;
         credential.sort_order = sort_order;
+        credential.edited_ms = edited_after(edited_ms);
+        self.sync_revision += 1;
         let user = credential.user.clone();
         for host in self.hosts.iter_mut().chain(&mut self.temporary) {
             if host.credential == Some(id) {
@@ -1366,8 +1656,14 @@ impl HostStore {
         };
         let released = self.remove_credential_unnotified(id);
         let auth = credential.kind.without_credential();
+        let edited_ms = released
+            .iter()
+            .filter_map(|host| self.saved_host(*host))
+            .map(|host| host.edited_ms)
+            .max()
+            .unwrap_or_else(|| edited_after(0));
         self.persist(Change::DeleteCredential, cx, |db| {
-            db.remove_credential(id, auth)
+            db.remove_credential(id, auth, edited_ms)
         });
         if credential.kind == CredentialKind::Password {
             self.save_secret(credential.password_secret(), None, cx);
@@ -1389,15 +1685,26 @@ impl HostStore {
         };
         let auth = self.credentials.remove(index).kind.without_credential();
         let mut released = Vec::new();
+        // The released hosts are edited on the user's behalf, all at one
+        // time, as the database records it.
+        let edited_ms = self
+            .hosts
+            .iter()
+            .filter(|host| host.credential == Some(id))
+            .map(|host| edited_after(host.edited_ms))
+            .max()
+            .unwrap_or_default();
         // A temporary host using it goes on as its saved ones do, though
         // the database never hears of it.
         for host in self.hosts.iter_mut().chain(&mut self.temporary) {
             if host.credential == Some(id) {
                 host.credential = None;
                 host.auth = auth;
+                host.edited_ms = edited_ms;
                 released.push(host.id);
             }
         }
+        self.sync_revision += 1;
         released
     }
 
@@ -1491,11 +1798,15 @@ impl HostStore {
                     return false;
                 };
                 for group in &mut self.groups {
+                    let before = (group.parent, group.sort_order);
                     if group.id == id {
                         group.parent = parent;
                     }
                     if let Some(order) = ids.iter().position(|sibling| *sibling == group.id) {
                         group.sort_order = order as i64;
+                    }
+                    if (group.parent, group.sort_order) != before {
+                        group.edited_ms = edited_after(group.edited_ms);
                     }
                 }
             }
@@ -1518,15 +1829,20 @@ impl HostStore {
                     return false;
                 };
                 for host in &mut self.hosts {
+                    let before = (host.group, host.sort_order);
                     if host.id == id {
                         host.group = parent;
                     }
                     if let Some(order) = ids.iter().position(|sibling| *sibling == host.id) {
                         host.sort_order = order as i64;
                     }
+                    if (host.group, host.sort_order) != before {
+                        host.edited_ms = edited_after(host.edited_ms);
+                    }
                 }
             }
         }
+        self.sync_revision += 1;
         true
     }
 
@@ -1545,9 +1861,11 @@ impl HostStore {
             return Vec::new();
         }
         let passwords = self.passwords_of(&self.hosts_under(id));
+        let emptied = self.jumping_through(&self.hosts_under(id));
         let removed = self.remove_group_unnotified(id);
         // One delete mirrors the whole subtree: both foreign keys cascade.
         self.persist(Change::DeleteGroup, cx, |db| db.remove_group(id));
+        self.write_hops_emptied(&emptied, cx);
         for password in passwords {
             self.forget_password(password, cx);
         }
@@ -1563,6 +1881,7 @@ impl HostStore {
         let mut doomed = self.descendant_groups(id);
         doomed.push(id);
         self.groups.retain(|group| !doomed.contains(&group.id));
+        self.sync_revision += 1;
         // As the database's `ON DELETE CASCADE` does.
         self.snippets.retain(|snippet| match snippet.scope {
             SnippetScope::Group(group) => !doomed.contains(&group),
@@ -1622,6 +1941,37 @@ impl HostStore {
         true
     }
 
+    /// Remember the right sidebar's tool for the host's terminals, `None`
+    /// for hidden. Only a saved host keeps it for the next launch.
+    pub fn set_host_sidebar_tool(
+        &mut self,
+        id: HostId,
+        tool: Option<ToolKind>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.set_host_sidebar_tool_unnotified(id, tool) {
+            return;
+        }
+        if !self.is_temporary(id) {
+            self.persist(Change::SidebarTool, cx, |db| {
+                db.set_host_sidebar_tool(id, tool)
+            });
+        }
+        cx.notify();
+    }
+
+    /// Returns whether the remembered tool changed.
+    pub fn set_host_sidebar_tool_unnotified(&mut self, id: HostId, tool: Option<ToolKind>) -> bool {
+        let Some(host) = self.host_mut(id) else {
+            return false;
+        };
+        if host.sidebar_tool == tool {
+            return false;
+        }
+        host.sidebar_tool = tool;
+        true
+    }
+
     /// Where passwords are read from. The host form uses this to pre-fill
     /// its field; the workspace hands it to the SSH provider.
     pub fn secrets(&self) -> SharedSecretStore {
@@ -1659,6 +2009,30 @@ impl HostStore {
             .map(Path::new);
         let path = write_key_file(dir, replace, text)?;
         Ok(path.display().to_string().into())
+    }
+
+    /// Keep a copy of the user's key file at `path` among ShellRS's own
+    /// keys, for `credential` as [`Self::save_private_key`] does, and say
+    /// where it went: what ShellRS keeps is what syncs. The user's file is
+    /// read once and never touched. `None` when there is nothing to do: the
+    /// file is one ShellRS keeps already, or there is no folder to keep
+    /// keys in.
+    pub fn keep_key_file(
+        &self,
+        credential: Option<CredentialId>,
+        path: &str,
+    ) -> io::Result<Option<SharedString>> {
+        if self.key_dir.is_none() || self.keeps_key(path) {
+            return Ok(None);
+        }
+        let text = super::private_key::read_small(Path::new(path))
+            .ok_or_else(|| io::Error::other(t!("host.store.key_unreadable").to_string()))?;
+        self.save_private_key(credential, &text).map(Some)
+    }
+
+    /// Whether `path` is a key file ShellRS keeps itself.
+    pub fn keeps_key_file(&self, path: &str) -> bool {
+        self.keeps_key(path)
     }
 
     /// Whether `path` is a key file ShellRS keeps itself.
@@ -1710,6 +2084,9 @@ impl HostStore {
 
     /// [`Self::save_secret`], for a caller that has to know how it went:
     /// the failure, already reported as `PersistFailed`.
+    ///
+    /// A secret saved is dated for sync once it is in the keychain: dated
+    /// before, a round in between could take the old value for the edit.
     pub fn write_secret(
         &mut self,
         secret: SecretRef,
@@ -1718,6 +2095,7 @@ impl HostStore {
     ) -> Task<Result<(), SharedString>> {
         let secrets = self.secrets();
         let failure = secret_failure(&secret, value.is_some());
+        let written = secret.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -1728,14 +2106,24 @@ impl HostStore {
                     }
                 })
                 .await;
-            result.map_err(|error| {
-                let message = failure(&error.to_string());
-                this.update(cx, |_, cx| {
-                    cx.emit(HostStoreEvent::PersistFailed(message.clone()));
-                })
-                .ok();
-                message
-            })
+            match result {
+                Ok(()) => {
+                    this.update(cx, |store, cx| {
+                        store.note_secret_edit(&written);
+                        cx.notify();
+                    })
+                    .ok();
+                    Ok(())
+                }
+                Err(error) => {
+                    let message = failure(&error.to_string());
+                    this.update(cx, |_, cx| {
+                        cx.emit(HostStoreEvent::PersistFailed(message.clone()));
+                    })
+                    .ok();
+                    Err(message)
+                }
+            }
         })
     }
 
@@ -1965,6 +2353,69 @@ mod tests {
 
     fn draft(name: &str, group: Option<GroupId>) -> HostDraft {
         HostDraft::new(name, "10.0.0.1", 22, "root", AuthKind::Password, group)
+    }
+
+    /// What the user changes is dated, each time anew, for sync to tell an
+    /// edit; what only this device keeps is not.
+    #[test]
+    fn edits_are_dated_and_what_only_this_device_keeps_is_not() {
+        let mut store = HostStore::empty();
+        let group = store.insert_group_unnotified(GroupDraft::new("生产", None));
+        let web = store.insert_unnotified(draft("web", Some(group)));
+        let created = store.host(web).unwrap().edited_ms;
+        assert!(created > 0);
+
+        let revision = store.sync_revision();
+        store.set_host_os_unnotified(web, Some(HostOs::Debian));
+        store.record_connection_unnotified(web);
+        assert_eq!(store.host(web).unwrap().edited_ms, created);
+        assert_eq!(store.sync_revision(), revision);
+
+        // Two edits in one millisecond are still two.
+        let mut renamed = store.host(web).unwrap().draft();
+        renamed.name = "web-01".into();
+        store.update_unnotified(web, renamed.clone());
+        let first = store.host(web).unwrap().edited_ms;
+        store.update_unnotified(web, renamed);
+        let second = store.host(web).unwrap().edited_ms;
+        assert!(created < first && first < second);
+        assert!(store.sync_revision() > revision);
+        assert!(PublicId::has_shape(
+            store.host(web).unwrap().public_id.as_str()
+        ));
+
+        // A group keeps its sync id through an edit.
+        let sync_id = store.group(group).unwrap().sync_id.clone();
+        store.update_group_unnotified(group, GroupDraft::new("prod", None));
+        assert_eq!(store.group(group).unwrap().sync_id, sync_id);
+
+        // Whether a forward starts with ShellRS is this device's own.
+        let rule = store
+            .insert_forward_unnotified(ForwardDraft::new(
+                ForwardKind::Dynamic,
+                web,
+                ForwardEndpoint::new("127.0.0.1", 1080),
+                None,
+            ))
+            .unwrap();
+        let before = store.forward(rule).unwrap().clone();
+        let started = before.draft().with_auto_start(true);
+        store.update_forward_unnotified(rule, started);
+        let after = store.forward(rule).unwrap();
+        assert!(after.auto_start);
+        assert_eq!(
+            (&after.sync_id, after.edited_ms),
+            (&before.sync_id, before.edited_ms)
+        );
+
+        // Deleting a jump host edits the hosts that went through it.
+        let inner =
+            store.insert_unnotified(draft("inner", None).with_route(Route::Jump(vec![Some(web)])));
+        let inner_before = store.host(inner).unwrap().edited_ms;
+        store.remove_unnotified(web);
+        let inner_after = store.host(inner).unwrap();
+        assert_eq!(inner_after.route, Route::Jump(vec![None]));
+        assert!(inner_after.edited_ms > inner_before);
     }
 
     #[test]
@@ -2564,6 +3015,34 @@ mod tests {
         assert!(failure.starts_with("密码未能写入系统钥匙串"), "{failure}");
     }
 
+    #[test]
+    fn a_key_file_of_the_users_is_copied_and_left_as_it_was() {
+        let data = tempfile::tempdir().unwrap();
+        let mine = data.path().join("id_mine");
+        std::fs::write(&mine, "mine").unwrap();
+        let store = HostStore::empty().with_key_dir(data.path().join("keys"));
+        let kept = store
+            .keep_key_file(None, &mine.display().to_string())
+            .unwrap()
+            .unwrap();
+        assert!(store.keeps_key_file(&kept));
+        assert_eq!(read(&kept), "mine");
+        assert_eq!(std::fs::read_to_string(&mine).unwrap(), "mine");
+        // One ShellRS keeps already stays where it is.
+        assert_eq!(store.keep_key_file(None, &kept).unwrap(), None);
+        // A file that is not there is not taken for an empty key.
+        let missing = data.path().join("missing").display().to_string();
+        assert!(store.keep_key_file(None, &missing).is_err());
+        // Without a folder to keep keys in, the file is used where it is.
+        let nowhere = HostStore::empty();
+        assert_eq!(
+            nowhere
+                .keep_key_file(None, &mine.display().to_string())
+                .unwrap(),
+            None
+        );
+    }
+
     #[gpui_kit::test]
     fn a_kept_key_goes_with_the_last_credential_using_it(cx: &mut gpui_kit::TestAppContext) {
         use crate::secrets::SecretStore as _;
@@ -2627,6 +3106,57 @@ mod tests {
 
         let copy = store.duplicate_unnotified(id).unwrap();
         assert_eq!(store.host(copy).unwrap().os, Some(HostOs::Alpine));
+    }
+
+    #[test]
+    fn the_sidebar_tool_survives_an_edit_and_goes_with_a_copy() {
+        use crate::app::ToolKind;
+
+        let mut store = HostStore::empty();
+        let id = store.insert_unnotified(draft("web", None));
+        assert_eq!(store.host(id).unwrap().sidebar_tool, None);
+        assert!(store.set_host_sidebar_tool_unnotified(id, Some(ToolKind::Files)));
+        assert!(!store.set_host_sidebar_tool_unnotified(id, Some(ToolKind::Files)));
+        assert!(!store.set_host_sidebar_tool_unnotified(HostId(99), Some(ToolKind::Files)));
+
+        store.update_unnotified(id, draft("web-renamed", None));
+        assert_eq!(store.host(id).unwrap().sidebar_tool, Some(ToolKind::Files));
+        let copy = store.duplicate_unnotified(id).unwrap();
+        assert_eq!(
+            store.host(copy).unwrap().sidebar_tool,
+            Some(ToolKind::Files)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn only_a_saved_host_keeps_its_sidebar_tool_for_the_next_launch(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::app::ToolKind;
+        use gpui_kit::AppContext as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        let store = cx.new(|_| HostStore::load(HostDatabase::open(&path).unwrap()).unwrap());
+        let (saved, temporary) = store.update(cx, |store, cx| {
+            let saved = store.insert(draft("web", None), cx);
+            let temporary = store.insert_temporary(draft("quick", None), None, cx);
+            store.set_host_sidebar_tool(saved, Some(ToolKind::Files), cx);
+            store.set_host_sidebar_tool(temporary, Some(ToolKind::Docker), cx);
+            (saved, temporary)
+        });
+        let tool_of = |store: &HostStore, id| store.host(id).and_then(|host| host.sidebar_tool);
+        store.read_with(cx, |store, _| {
+            assert_eq!(tool_of(store, temporary), Some(ToolKind::Docker));
+        });
+        let reopened = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+        assert_eq!(tool_of(&reopened, saved), Some(ToolKind::Files));
+        assert!(reopened.host(temporary).is_none());
+
+        // Hidden is kept the same way.
+        store.update(cx, |store, cx| store.set_host_sidebar_tool(saved, None, cx));
+        let reopened = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+        assert_eq!(tool_of(&reopened, saved), None);
     }
 
     #[test]

@@ -3,27 +3,31 @@
 mod actions;
 mod app_icon;
 mod assets;
+mod computer;
 mod paths;
 mod quit;
 mod rendering;
 mod shortcuts;
+mod system_hotkey;
 mod window_hiding;
 
 pub use actions::*;
 pub use app_icon::show_logo_when_unbundled;
 pub use assets::{AppAssets, CatalogIcon, DOCKER_ICON};
+pub use computer::computer_name;
 pub use paths::{
     PORTABLE_BIN, PORTABLE_DATA, SETUP_UNINSTALLER, analytics_path, cli_endpoint, cli_socket_path,
-    data_dir, database_path, keys_dir, portable_root, settings_path, updates_dir,
-    window_state_path,
+    data_dir, database_path, keys_dir, portable_root, settings_path, terminal_output_dir,
+    updates_dir, window_state_path,
 };
 pub use quit::{quit_held_back, set_quit_guard};
 pub use rendering::{note_renderer, software_rendering};
 pub use shortcuts::{
     Refusal, SHORTCUTS, Shortcut, ShortcutGroup, ShortcutOverrides, apply_shortcuts, check,
-    fixed_bindings, key_caps, key_text,
+    fixed_bindings, key_caps, key_text, listen_for_system_hotkey,
 };
-pub use window_hiding::{MainWindow, bring_forward, hide_when_closed};
+pub use system_hotkey::{system_hotkey_available, take_system_hotkey_press};
+pub use window_hiding::{MainWindow, bring_forward, hide_when_closed, restore_window, send_back};
 
 use gpui_kit::component::Theme;
 use gpui_kit::*;
@@ -46,6 +50,11 @@ pub const LOCAL_FILE_LIST_CONTEXT: &str = "LocalFileList";
 pub const REMOTE_FILE_LIST_CONTEXT: &str = "RemoteFileList";
 /// The 查找文件 window of an SFTP tab.
 pub const FIND_FILES_CONTEXT: &str = "FindFiles";
+
+/// What Linux desktops match ShellRS's windows to its launcher by, for its
+/// icon in the dock: Wayland's app_id and X11's `WM_CLASS`, as
+/// `packaging/linux/shellrs.desktop` names them. Unused elsewhere.
+pub const DESKTOP_APP_ID: &str = "shellrs";
 
 /// The identity the system shows ShellRS's notifications and taskbar button
 /// under: the macOS bundle's, which the Windows setup gives its shortcuts
@@ -135,7 +144,17 @@ mod tests {
     use gpui_kit::TestAppContext;
     use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
 
-    use super::{deepen_list_hover, deepened_hover};
+    use super::{DESKTOP_APP_ID, deepen_list_hover, deepened_hover};
+
+    #[test]
+    fn windows_carry_the_linux_launchers_window_class() {
+        let desktop = include_str!("../../packaging/linux/shellrs.desktop");
+        assert!(
+            desktop
+                .lines()
+                .any(|line| line == format!("StartupWMClass={DESKTOP_APP_ID}"))
+        );
+    }
 
     #[gpui_kit::test]
     fn dark_hover_is_fainter_than_a_selected_row(cx: &mut TestAppContext) {

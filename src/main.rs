@@ -53,6 +53,8 @@ fn main() {
             open_settings()
         };
         shellrs::init(cx);
+        // 显示或隐藏 ShellRS takes its key from the system; tests never do.
+        shellrs::app::listen_for_system_hotkey(cx);
         shellrs::app::show_logo_when_unbundled(cx);
         cx.activate(true);
 
@@ -114,7 +116,8 @@ fn open_store() -> (HostStore, Option<SharedString>) {
         Ok(store) => {
             let mut store = store
                 .with_secrets(secrets)
-                .with_key_dir(shellrs::app::keys_dir());
+                .with_key_dir(shellrs::app::keys_dir())
+                .with_terminal_output_dir(shellrs::app::terminal_output_dir());
             let problem = store.adopt_moved_keys();
             (store, problem)
         }

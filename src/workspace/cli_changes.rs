@@ -2,13 +2,15 @@
 //! is opened again, the changes to hosts and credentials a `shellrs`
 //! command asks for, and the `exec --terminal` runs. The request threads
 //! cannot reach the store or the terminals; the changes and the runs wait
-//! in the server until they are taken up here.
+//! in the server until they are taken up here. 显示或隐藏 ShellRS, the
+//! key the system hears for it, waits alike.
 
 use std::time::Duration;
 
 use gpui_kit::*;
 
 use crate::analytics::Counter;
+use crate::app::ShowOrHideApp;
 use crate::cli::{
     CliChange, CliError, CliUse, CredentialDeleted, CredentialFields, ErrorCode, HostDeleted,
     HostFields, Reply,
@@ -18,7 +20,7 @@ use crate::cli::{
     find_host, find_saved_host, host_details, host_info, host_secrets, plan_credential, plan_host,
     with_saved_credential_secrets, with_saved_passwords,
 };
-use crate::host::{CredentialId, HostId, HostStore};
+use crate::host::{CredentialId, CredentialKind, HostId, HostStore};
 use crate::i18n::t;
 use crate::secrets::{SecretRef, SharedSecretStore};
 use crate::terminal::{RunFailure, RunHandle, TerminalLifecycle, TerminalPanel};
@@ -44,6 +46,9 @@ impl Workspace {
             loop {
                 cx.background_executor().timer(CLI_POLL).await;
                 let taken = this.update_in(cx, |this, window, cx| {
+                    if crate::app::take_system_hotkey_press() {
+                        this.on_show_or_hide_app(&ShowOrHideApp, window, cx);
+                    }
                     let server = this.cli_server.as_ref()?;
                     let links = server.take_activation();
                     let change = server.take_change();
@@ -353,6 +358,22 @@ fn save_credential(
                 )
             })?;
         draft = draft.with_key_path(path);
+    } else if let Some(path) = draft
+        .key_path
+        .clone()
+        .filter(|_| draft.kind == CredentialKind::Key)
+    {
+        // A key file named is copied among ShellRS's own keys, as the
+        // credential form does: that is what syncs.
+        let kept = store.keep_key_file(existing, &path).map_err(|error| {
+            CliError::new(
+                ErrorCode::SaveFailed,
+                t!("cli.change.key_not_copied", error = error),
+            )
+        })?;
+        if let Some(kept) = kept {
+            draft = draft.with_key_path(kept);
+        }
     }
     let (id, failures) = store.capture_failures(cx, |store, cx| match existing {
         Some(id) => {
