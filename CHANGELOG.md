@@ -4,7 +4,9 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Keep English and Chinese entries together. The release workflow uses the matching English section for this repository’s GitHub Release.
 
-## [0.1.15]
+## [0.1.15+sirly.1]
+
+First fork revision based on upstream 0.1.15. Versions use `<upstream>+sirly.<revision>`, starting at 1 for each upstream version.
 
 ### Added
 

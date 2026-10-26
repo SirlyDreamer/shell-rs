@@ -168,7 +168,7 @@ Cargo workspace，`cargo` 命令默认覆盖两个包：
 - `exec --terminal` 的细节在 `terminal/run.rs`；真实 shell 的测试在 Docker 里（CI：`shells.yml`）。
 - **Windows** 可本地验证，CI 也必须通过：`windows.yml` 按路径触发，新加 `cfg(windows)` 代码的文件要加进那个列表。发布版是 GUI 子系统，命令行由 `shellrs-cli.exe` 承担。
 - 在线升级和统计在 UI 测试里都没有真实服务，测试从不联网；统计新加计数要同步两份手册「隐私」一节的清单。
-- **发布走 tag**：GitHub Actions 构建并上传到当前仓库 Release，生成 SHA256SUMS；不调用 Cloudflare/R2、官网部署或更新清单，不要求额外人工审批。更新日志中英两份（`CHANGELOG.zh.md`、`CHANGELOG.md`）都要有对应版本，版本号沿用上游格式。
+- **发布走 tag**：GitHub Actions 构建并上传到当前仓库 Release，生成 SHA256SUMS；不调用 Cloudflare/R2、官网部署或更新清单，不要求额外人工审批。更新日志中英两份（`CHANGELOG.zh.md`、`CHANGELOG.md`）都要有对应版本。版本号统一为 `<上游版本号>+sirly.<改进次数>`，同一上游版本每次发布改进版递增，切换上游版本后从 1 计数；Cargo、软件显示、Git 标签和安装包使用相同格式，不作转换。
 - macOS 上关窗口是隐藏，⌘Q 才退出。
 
 ### 同步核心（`crates/shellrs-sync`）
