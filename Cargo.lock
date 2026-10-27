@@ -7799,7 +7799,7 @@ dependencies = [
 
 [[package]]
 name = "shellrs"
-version = "0.1.15+sirly.1"
+version = "0.1.16+sirly.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",

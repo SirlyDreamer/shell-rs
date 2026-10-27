@@ -4,6 +4,27 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Keep English and Chinese entries together. The release workflow uses the matching English section for this repository’s GitHub Release.
 
+## [0.1.16+sirly.1]
+
+Based on upstream 0.1.16; keeps direct broadcast between visible terminals, the manually opened compose pane, RDP rendering optimizations, and GitHub-only releases.
+
+### Added
+
+- Cloud sync: sync your data between computers, end-to-end encrypted (E2EE): it’s encrypted before it leaves this computer, so remote storage holds only ciphertext, and only devices with the password can read it.
+- When the tabs don’t fit, scroll the tab bar sideways with the mouse wheel.
+
+### Fixed
+
+- Changing the cloud sync password also rotates the data key. The keychain keeps only the latest eight generations, retrieving older keys when needed to stay within Windows Credential Manager's size limit.
+- In a terminal, Home and End didn’t move to the start and end of the line when zsh on the server was set up with oh-my-zsh and the like.
+
+## [0.1.16-beta.1]
+
+### Added
+
+- Cloud sync: sync your data between computers, end-to-end encrypted (E2EE): it’s encrypted before it leaves this computer, so remote storage holds only ciphertext, and only devices with the password can read it.
+- When the tabs don’t fit, scroll the tab bar sideways with the mouse wheel.
+
 ## [0.1.15+sirly.1]
 
 First fork revision based on upstream 0.1.15. Versions use `<upstream>+sirly.<revision>`, starting at 1 for each upstream version.

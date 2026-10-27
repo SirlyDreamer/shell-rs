@@ -1,7 +1,7 @@
 [package]
 name = "shellrs"
 # Fork version: <upstream>+sirly.<revision>; reset the revision for each upstream version.
-version = "0.1.15+sirly.1"
+version = "0.1.16+sirly.1"
 edition = "2024"
 publish = false
 description = "SSH client and host manager: terminal, SFTP, port forwarding"

@@ -228,6 +228,8 @@ async fn broadcast_reaches_visible_splits_and_encodes_each_terminal_mode(cx: &mu
         window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
         window.input("中文", cx);
         window.press("up", cx);
+        window.press("home", cx);
+        window.press("end", cx);
         window.press("enter", cx);
         window.press("ctrl-c", cx);
         cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo".into()));
@@ -240,9 +242,12 @@ async fn broadcast_reaches_visible_splits_and_encodes_each_terminal_mode(cx: &mu
     .await;
     assert_eq!(
         fixture.web.written_text(),
-        "solo中文\x1bOA\r\x03\x1b[200~one\ntwo\x1b[201~"
+        "solo中文\x1bOA\x1bOH\x1bOF\r\x03\x1b[200~one\ntwo\x1b[201~"
     );
-    assert_eq!(fixture.staging.written_text(), "中文\x1b[A\r\x03one\ntwo");
+    assert_eq!(
+        fixture.staging.written_text(),
+        "中文\x1b[A\x1b[H\x1b[F\r\x03one\ntwo"
+    );
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal", INITIAL_STAGING_TERMINAL), cx)
     });
